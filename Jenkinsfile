@@ -1,15 +1,28 @@
 pipeline {
-  agent any
-  stages {
-    stage('Pull Docker image') {
-      steps {
-        sh 'docker pull asaph/donlocal-api:latest'
-      }
+    agent any
+    environment {
+        IMAGE_NAME = "asaphkouokam/donlocal-api:latest"
     }
-    stage('Deploy with Ansible') {
-      steps {
-        sh 'ansible-playbook deploy.yml'
-      }
+    stages {
+        stage('Docker Pull') {
+            steps {
+                echo "Pulling Docker image on Windows..."
+                bat "docker pull %IMAGE_NAME%"
+            }
+        }
+        stage('Deploy to Kubernetes') {
+            steps {
+                echo "Deploying via Ansible in WSL..."
+                bat "wsl ansible-playbook /home/asaph/deploy.yml"
+            }
+        }
     }
-  }
+    post {
+        success {
+            echo "Deployment completed successfully!"
+        }
+        failure {
+            echo "Deployment failed. Check logs."
+        }
+    }
 }
