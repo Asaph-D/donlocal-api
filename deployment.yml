@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: donlocal-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: donlocal-api
+  template:
+    metadata:
+      labels:
+        app: donlocal-api
+    spec:
+      containers:
+      - name: donlocal-api
+        image: asaph/donlocal-api:latest
+        ports:
+        - containerPort: 5000

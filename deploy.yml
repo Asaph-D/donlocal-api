@@ -1,0 +1,5 @@
+- name: Deploy donlocal-api to Kubernetes
+  hosts: k8s-master
+  tasks:
+    - name: Apply Kubernetes manifests
+      command: kubectl apply -f /home/ubuntu/deployments/donlocal-api/
