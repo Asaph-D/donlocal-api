@@ -1,13 +1,24 @@
 pipeline {
     agent any
     environment {
-        IMAGE_NAME = "asaphkouokam/donlocal-api:latest"
+        IMAGE_NAME = "" // sera défini dynamiquement après checkout
     }
     stages {
+        stage('Checkout') {
+            steps {
+                // Récupère le code depuis Git
+                checkout scm
+                script {
+                    // Définit le tag Docker avec le commit actuel
+                    env.IMAGE_NAME = "asaphkouokam/donlocal-api:${env.GIT_COMMIT}"
+                    echo "Using Docker image: ${env.IMAGE_NAME}"
+                }
+            }
+        }
         stage('Docker Pull') {
             steps {
-                echo "Pulling Docker image on Windows..."
-                bat "docker pull %IMAGE_NAME%"
+                echo "Pulling Docker image..."
+                bat "docker pull ${env.IMAGE_NAME}"
             }
         }
         stage('Deploy to Kubernetes') {
