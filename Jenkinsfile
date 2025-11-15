@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        IMAGE_NAME = "" // sera défini dynamiquement après checkout
+        IMAGE_NAME = ""
     }
     stages {
         stage('Checkout') {
