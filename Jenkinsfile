@@ -7,7 +7,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 // Récupère le code depuis Git
-                checkout scm
+                checkout scm 
                 script {
                     // Définit le tag Docker avec le commit actuel
                     env.IMAGE_NAME = "asaphkouokam/donlocal-api:${env.GIT_COMMIT}"
