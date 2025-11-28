@@ -8,6 +8,7 @@ on:
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -18,9 +19,15 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Tag Docker image with commit
+      - name: Tag and push Docker image
         run: |
           TAG=${{ github.sha }}
-          docker tag donlocal-api ${{ secrets.DOCKER_USERNAME }}/donlocal-api:$TAG
-          docker push ${{ secrets.DOCKER_USERNAME }}/donlocal-api:$TAG
+          IMAGE=${{ secrets.DOCKER_USERNAME }}/donlocal-api
 
+          # Tag commit version
+          docker tag donlocal-api $IMAGE:$TAG
+          docker push $IMAGE:$TAG
+
+          # Tag latest
+          docker tag donlocal-api $IMAGE:latest
+          docker push $IMAGE:latest

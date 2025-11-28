@@ -1,39 +1,69 @@
 pipeline {
     agent any
+
     environment {
+        DOCKER_USER = "asaphkouokam"
+        IMAGE_REPO = "donlocal-api"
+        IMAGE_TAG = ""
         IMAGE_NAME = ""
     }
+
     stages {
+
         stage('Checkout') {
             steps {
-                // Récupère le code depuis Git
-                checkout scm 
+                checkout scm
+
                 script {
-                    // Définit le tag Docker avec le commit actuel
-                    env.IMAGE_NAME = "asaphkouokam/donlocal-api:${env.GIT_COMMIT}"
-                    echo "Using Docker image: ${env.IMAGE_NAME}"
+                    // Récupérer le commit SHA réel du code checkouté
+                    env.IMAGE_TAG = bat(
+                        script: "git rev-parse HEAD",
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:${env.IMAGE_TAG}"
+
+                    echo "Commit detected: ${env.IMAGE_TAG}"
+                    echo "Targeting Docker image: ${env.IMAGE_NAME}"
                 }
             }
         }
+
         stage('Docker Pull') {
             steps {
-                echo "Pulling Docker image..."
-                bat "docker pull ${env.IMAGE_NAME}"
+                script {
+                    echo "Pulling image: ${env.IMAGE_NAME}"
+
+                    def status = bat(
+                        script: "docker pull ${env.IMAGE_NAME}",
+                        returnStatus: true
+                    )
+
+                    if (status != 0) {
+                        echo "⚠️ Tag not found, fallback to latest"
+                        env.IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
+                        bat "docker pull ${env.IMAGE_NAME}"
+                    } else {
+                        echo "✅ Successfully pulled ${env.IMAGE_NAME}"
+                    }
+                }
             }
         }
+
         stage('Deploy to Kubernetes') {
             steps {
-                echo "Deploying via Ansible in WSL..."
-                bat "wsl ansible-playbook /home/asaph/deploy.yml"
+                echo "Deploying with image: ${env.IMAGE_NAME}"
+                bat "wsl ansible-playbook /home/asaph/deploy.yml --extra-vars \"image=${env.IMAGE_NAME}\""
             }
         }
     }
+
     post {
         success {
             echo "Deployment completed successfully!"
         }
         failure {
-            echo "Deployment failed. Check logs."
+            echo "Deployment failed. Check Jenkins logs."
         }
     }
 }
