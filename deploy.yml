@@ -3,4 +3,4 @@
   connection: local
   tasks:
     - name: Apply Kubernetes manifest
-      command: kubectl apply -f /home/asaph/deployment.yml
+      command: kubectl apply -f /mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deployment.yml

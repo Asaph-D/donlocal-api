@@ -1,3 +1,4 @@
+# deploy.yml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,7 +14,7 @@ spec:
         app: donlocal-api
     spec:
       containers:
-      - name: donlocal-api
-        image: asaphkouokam/donlocal-api:latest
-        ports:
-        - containerPort: 5000
+        - name: donlocal-api
+          image: "{{ image }}"
+          ports:
+            - containerPort: 5000

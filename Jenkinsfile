@@ -47,7 +47,7 @@ pipeline {
             steps {
                 echo "Deploying with image: ${IMAGE_NAME}"
                 powershell """
-                wsl -u asaph ansible-playbook /home/asaph/deploy.yml --extra-vars "image=${IMAGE_NAME}"
+                wsl -u asaph ansible-playbook /mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml --extra-vars "image=${IMAGE_NAME}"
                 """
             }
         }
