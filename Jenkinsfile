@@ -15,16 +15,12 @@ pipeline {
                 checkout scm
 
                 script {
-                    // Récupérer le commit SHA réel du code checkouté
-                    env.IMAGE_TAG = bat(
-                        script: "git rev-parse HEAD",
-                        returnStdout: true
-                    ).trim()
+                    // Extraire le commit SHA correctement sur Windows
+                    IMAGE_TAG = powershell(returnStdout: true, script: 'git rev-parse HEAD').trim()
+                    IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:${IMAGE_TAG}"
 
-                    env.IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:${env.IMAGE_TAG}"
-
-                    echo "Commit detected: ${env.IMAGE_TAG}"
-                    echo "Targeting Docker image: ${env.IMAGE_NAME}"
+                    echo "Commit detected: ${IMAGE_TAG}"
+                    echo "Targeting Docker image: ${IMAGE_NAME}"
                 }
             }
         }
@@ -32,19 +28,16 @@ pipeline {
         stage('Docker Pull') {
             steps {
                 script {
-                    echo "Pulling image: ${env.IMAGE_NAME}"
+                    echo "Pulling image: ${IMAGE_NAME}"
 
-                    def status = bat(
-                        script: "docker pull ${env.IMAGE_NAME}",
-                        returnStatus: true
-                    )
+                    def status = powershell(returnStatus: true, script: "docker pull ${IMAGE_NAME}")
 
                     if (status != 0) {
                         echo "⚠️ Tag not found, fallback to latest"
-                        env.IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
-                        bat "docker pull ${env.IMAGE_NAME}"
+                        IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
+                        powershell "docker pull ${IMAGE_NAME}"
                     } else {
-                        echo "✅ Successfully pulled ${env.IMAGE_NAME}"
+                        echo "✅ Successfully pulled ${IMAGE_NAME}"
                     }
                 }
             }
@@ -52,18 +45,18 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                echo "Deploying with image: ${env.IMAGE_NAME}"
-                bat "wsl ansible-playbook /home/asaph/deploy.yml --extra-vars \"image=${env.IMAGE_NAME}\""
+                echo "Deploying with image: ${IMAGE_NAME}"
+                powershell "wsl ansible-playbook /home/asaph/deploy.yml --extra-vars \"image=${IMAGE_NAME}\""
             }
         }
     }
 
     post {
         success {
-            echo "Deployment completed successfully!"
+            echo "🚀 Deployment completed successfully!"
         }
         failure {
-            echo "Deployment failed. Check Jenkins logs."
+            echo "❌ Deployment failed. Check Jenkins logs."
         }
     }
 }
