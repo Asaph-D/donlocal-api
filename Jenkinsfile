@@ -33,11 +33,11 @@ pipeline {
                     def status = powershell(returnStatus: true, script: "docker pull ${IMAGE_NAME}")
 
                     if (status != 0) {
-                        echo "⚠️ Tag not found, fallback to latest"
+                        echo "Tag not found, fallback to latest"
                         IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
                         powershell "docker pull ${IMAGE_NAME}"
                     } else {
-                        echo "✅ Successfully pulled ${IMAGE_NAME}"
+                        echo "Successfully pulled ${IMAGE_NAME}"
                     }
                 }
             }
@@ -46,17 +46,20 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 echo "Deploying with image: ${IMAGE_NAME}"
-                powershell "wsl ansible-playbook /home/asaph/deploy.yml --extra-vars \"image=${IMAGE_NAME}\""
+                powershell """
+                wsl -u asaph ansible-playbook /home/asaph/deploy.yml --extra-vars "image=${IMAGE_NAME}"
+                """
             }
         }
+
     }
 
     post {
         success {
-            echo "🚀 Deployment completed successfully!"
+            echo "Deployment completed successfully!"
         }
         failure {
-            echo "❌ Deployment failed. Check Jenkins logs."
+            echo "Deployment failed. Check Jenkins logs."
         }
     }
 }
