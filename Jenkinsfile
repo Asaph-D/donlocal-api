@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent { label 'linux' }  // <-- ICI LA MAGIE !!
 
     environment {
         DOCKER_USER = "asaphkouokam"
@@ -15,8 +15,7 @@ pipeline {
                 checkout scm
 
                 script {
-                    // Extraire le commit SHA correctement sur Windows
-                    IMAGE_TAG = powershell(returnStdout: true, script: 'git rev-parse HEAD').trim()
+                    IMAGE_TAG = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
                     IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:${IMAGE_TAG}"
 
                     echo "Commit detected: ${IMAGE_TAG}"
@@ -30,12 +29,12 @@ pipeline {
                 script {
                     echo "Pulling image: ${IMAGE_NAME}"
 
-                    def status = powershell(returnStatus: true, script: "docker pull ${IMAGE_NAME}")
+                    def status = sh(returnStatus: true, script: "docker pull ${IMAGE_NAME}")
 
                     if (status != 0) {
                         echo "Tag not found, fallback to latest"
                         IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
-                        powershell "docker pull ${IMAGE_NAME}"
+                        sh "docker pull ${IMAGE_NAME}"
                     } else {
                         echo "Successfully pulled ${IMAGE_NAME}"
                     }
@@ -46,11 +45,12 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 echo "Deploying with image: ${IMAGE_NAME}"
-                powershell """
-                wsl bash -c \"
-                export KUBECONFIG=/home/asaph/.kube/config && \
-                kubectl config use-context docker-desktop && \
-                ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars 'image=${IMAGE_NAME}'\"
+
+                sh """
+                    export KUBECONFIG=/home/asaph/.kube/config
+                    kubectl config use-context docker-desktop
+                    ansible-playbook /home/jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml \
+                        --extra-vars "image=${IMAGE_NAME}"
                 """
             }
         }
