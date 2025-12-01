@@ -47,7 +47,9 @@ pipeline {
             steps {
                 echo "Deploying with image: ${IMAGE_NAME}"
                 powershell """
-                wsl /usr/bin/ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars "image=${IMAGE_NAME}"
+                wsl bash -c "export KUBECONFIG=/home/asaph/.kube/config && \
+                kubectl config use-context docker-desktop && \
+                ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars 'image=${IMAGE_NAME}'"
                 """
             }
         }
