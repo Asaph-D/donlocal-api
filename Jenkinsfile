@@ -1,29 +1,37 @@
 pipeline {
     agent any
+
     environment {
         DOCKER_USER = "asaphkouokam"
         IMAGE_REPO = "donlocal-api"
         IMAGE_TAG = ""
         IMAGE_NAME = ""
     }
+
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
+
                 script {
-                    // Extract the commit SHA correctly on Windows
+                    // Extraire le commit SHA correctement sur Windows
                     IMAGE_TAG = powershell(returnStdout: true, script: 'git rev-parse HEAD').trim()
                     IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:${IMAGE_TAG}"
+
                     echo "Commit detected: ${IMAGE_TAG}"
                     echo "Targeting Docker image: ${IMAGE_NAME}"
                 }
             }
         }
+
         stage('Docker Pull') {
             steps {
                 script {
                     echo "Pulling image: ${IMAGE_NAME}"
+
                     def status = powershell(returnStatus: true, script: "docker pull ${IMAGE_NAME}")
+
                     if (status != 0) {
                         echo "Tag not found, fallback to latest"
                         IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
@@ -34,28 +42,27 @@ pipeline {
                 }
             }
         }
+
         stage('Deploy to Kubernetes') {
             steps {
                 echo "Deploying with image: ${IMAGE_NAME}"
-                powershell """
-                try {
-                    wsl bash -c "
-                    export KUBECONFIG=/home/asaph/.kube/config && \
-                    kubectl config use-context docker-desktop && \
-                    ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars 'image=${IMAGE_NAME}'
-                    "
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Host "Ansible playbook failed with exit code $LASTEXITCODE"
-                        exit $LASTEXITCODE
+                script {
+                    def exitCode = powershell(returnStatus: true, script: '''
+                        wsl bash -c "
+                        export KUBECONFIG=/home/asaph/.kube/config && \
+                        kubectl config use-context docker-desktop && \
+                        ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars 'image=${IMAGE_NAME}'
+                        "
+                    ''')
+                    if (exitCode != 0) {
+                        error "Ansible playbook failed with exit code ${exitCode}"
                     }
-                } catch {
-                    Write-Host "Error: $_"
-                    exit 1
                 }
-                """
             }
         }
+
     }
+
     post {
         success {
             echo "Deployment completed successfully!"
