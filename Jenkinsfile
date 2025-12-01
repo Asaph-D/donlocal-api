@@ -46,18 +46,9 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 echo "Deploying with image: ${IMAGE_NAME}"
-                script {
-                    def exitCode = powershell(returnStatus: true, script: '''
-                        wsl bash -c "
-                        export KUBECONFIG=/home/asaph/.kube/config && \
-                        kubectl config use-context docker-desktop && \
-                        ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars 'image=${IMAGE_NAME}'
-                        "
-                    ''')
-                    if (exitCode != 0) {
-                        error "Ansible playbook failed with exit code ${exitCode}"
-                    }
-                }
+                powershell """
+                wsl /usr/bin/ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars "image=${IMAGE_NAME}"
+                """
             }
         }
 
