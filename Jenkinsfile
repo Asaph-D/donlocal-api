@@ -12,16 +12,14 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                
+
                 script {
-                    // Get commit hash
-                    def commitOutput = bat(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    def lines = commitOutput.split('\n')
-                    env.IMAGE_TAG = lines[lines.length - 1].trim()
+                    // Extraire le commit SHA avec PowerShell
+                    env.IMAGE_TAG = powershell(returnStdout: true, script: 'git rev-parse HEAD').trim()
                     env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:${env.IMAGE_TAG}"
-                    
-                    echo "📦 Commit: ${env.IMAGE_TAG}"
-                    echo "🐳 Image: ${env.IMAGE_NAME}"
+
+                    echo "Commit detected: ${env.IMAGE_TAG}"
+                    echo "Targeting Docker image: ${env.IMAGE_NAME}"
                 }
             }
         }
@@ -29,20 +27,16 @@ pipeline {
         stage('Docker Pull') {
             steps {
                 script {
-                    echo "⬇️ Pulling image: ${env.IMAGE_NAME}"
-                    
-                    // Try to pull specific tag
-                    def pullStatus = bat(
-                        script: "docker pull ${env.IMAGE_NAME}",
-                        returnStatus: true
-                    )
-                    
-                    if (pullStatus != 0) {
-                        echo "🔁 Tag not found, fallback to latest"
+                    echo "Pulling image: ${env.IMAGE_NAME}"
+
+                    def status = powershell(returnStatus: true, script: "docker pull ${env.IMAGE_NAME}")
+
+                    if (status != 0) {
+                        echo "Tag not found, fallback to latest"
                         env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:latest"
-                        bat "docker pull ${env.IMAGE_NAME}"
+                        powershell "docker pull ${env.IMAGE_NAME}"
                     } else {
-                        echo "✅ Successfully pulled ${env.IMAGE_NAME}"
+                        echo "Successfully pulled ${env.IMAGE_NAME}"
                     }
                 }
             }
@@ -51,29 +45,34 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    echo "🚀 Deploying to Kubernetes with image: ${env.IMAGE_NAME}"
+                    echo "Deploying with image: ${env.IMAGE_NAME}"
                     
-                    // Method 1: Update deployment directly using kubectl
-                    bat """
-                        echo "Updating deployment ${env.DEPLOYMENT_NAME} with image ${env.IMAGE_NAME}"
-                        kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} -n ${env.KUBE_NAMESPACE} --record
+                    // Utiliser kubectl directement au lieu de WSL
+                    powershell """
+                        Write-Host "🚀 Updating Kubernetes deployment..."
                         
-                        if errorlevel 1 (
-                            echo "❌ Failed to update with specific tag, trying latest..."
-                            kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.DOCKER_USER}/${env.IMAGE_REPO}:latest -n ${env.KUBE_NAMESPACE} --record
-                        )
-                    """
-                    
-                    // Wait for rollout to complete
-                    bat """
-                        echo "⏳ Waiting for rollout to complete..."
+                        # Mettre à jour l'image du déploiement
+                        \$command = "kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} -n ${env.KUBE_NAMESPACE} --record"
+                        Write-Host "Executing: \$command"
+                        Invoke-Expression \$command
+                        
+                        if (\$LASTEXITCODE -ne 0) {
+                            Write-Host "⚠️ Failed with specific tag, trying latest..."
+                            \$fallbackCommand = "kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.DOCKER_USER}/${env.IMAGE_REPO}:latest -n ${env.KUBE_NAMESPACE} --record"
+                            Invoke-Expression \$fallbackCommand
+                        }
+                        
+                        # Attendre le déploiement
+                        Write-Host "⏳ Waiting for rollout..."
                         kubectl rollout status deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} --timeout=300s
                         
-                        if errorlevel 1 (
-                            echo "⚠️ Rollout taking too long or failed"
+                        if (\$LASTEXITCODE -ne 0) {
+                            Write-Host "❌ Rollout failed, rolling back..."
                             kubectl rollout undo deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE}
                             exit 1
-                        )
+                        }
+                        
+                        Write-Host "✅ Deployment successful!"
                     """
                 }
             }
@@ -82,16 +81,16 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    echo "🔍 Verifying deployment..."
+                    echo "Verifying deployment..."
                     
-                    bat """
-                        echo "=== Current deployment status ==="
+                    powershell """
+                        Write-Host "=== Deployment Status ==="
                         kubectl get deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} -o wide
                         
-                        echo "=== Pods status ==="
+                        Write-Host "=== Pods ==="
                         kubectl get pods -n ${env.KUBE_NAMESPACE} -l app=${env.DEPLOYMENT_NAME}
                         
-                        echo "=== Current image ==="
+                        Write-Host "=== Current Image ==="
                         kubectl get deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].image}'
                     """
                 }
@@ -104,10 +103,8 @@ pipeline {
             echo "🎉 Deployment completed successfully!"
             
             script {
-                // Show final status
-                bat """
-                    echo "=== Final Status ==="
-                    kubectl get deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE}
+                powershell """
+                    Write-Host "=== Final Summary ==="
                     kubectl rollout history deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE}
                 """
             }
@@ -116,28 +113,25 @@ pipeline {
             echo "💥 Deployment failed!"
             
             script {
-                // Debug information
-                bat """
-                    echo "=== Debug Info ==="
-                    echo "Image used: ${env.IMAGE_NAME}"
-                    echo "Deployment: ${env.DEPLOYMENT_NAME}"
+                powershell """
+                    Write-Host "=== Debug Information ==="
                     
-                    echo "=== Current Pods ==="
+                    Write-Host "1. Current deployments:"
+                    kubectl get deployments -n ${env.KUBE_NAMESPACE}
+                    
+                    Write-Host "2. Pods status:"
                     kubectl get pods -n ${env.KUBE_NAMESPACE}
                     
-                    echo "=== Deployment Events ==="
-                    kubectl describe deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} | findstr Events
+                    Write-Host "3. Events:"
+                    kubectl get events -n ${env.KUBE_NAMESPACE} --sort-by='.lastTimestamp' | Select-Object -Last 10
                     
-                    echo "=== Pod Logs (last deployment) ==="
-                    for /f "tokens=1" %%i in ('kubectl get pods -n ${env.KUBE_NAMESPACE} -l app^=${env.DEPLOYMENT_NAME} --sort-by=.metadata.creationTimestamp -o name ^| findstr /v "No resources" ^| head -1') do (
-                        kubectl logs %%i -n ${env.KUBE_NAMESPACE} --tail=50
-                    )
+                    Write-Host "4. Failed pod logs:"
+                    \$failedPod = kubectl get pods -n ${env.KUBE_NAMESPACE} -l app=${env.DEPLOYMENT_NAME} --field-selector=status.phase!=Running -o name
+                    if (\$failedPod) {
+                        kubectl logs \$failedPod -n ${env.KUBE_NAMESPACE} --tail=50
+                    }
                 """
             }
-        }
-        always {
-            echo "🧹 Cleaning up..."
-            // You can add cleanup steps here if needed
         }
     }
 }
