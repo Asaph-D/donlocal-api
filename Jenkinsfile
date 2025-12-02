@@ -4,6 +4,8 @@ pipeline {
     environment {
         DOCKER_USER = "asaphkouokam"
         IMAGE_REPO = "donlocal-api"
+        DEPLOYMENT_NAME = "donlocal-api"
+        KUBE_NAMESPACE = "default"
     }
 
     stages {
@@ -14,21 +16,12 @@ pipeline {
                 script {
                     // Get commit hash
                     def commitOutput = bat(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    
-                    // Extract just the hash (remove the command line from output)
                     def lines = commitOutput.split('\n')
-                    def commitHash = lines[lines.length - 1].trim()
-                    
-                    // Store in environment variables
-                    env.IMAGE_TAG = commitHash
+                    env.IMAGE_TAG = lines[lines.length - 1].trim()
                     env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:${env.IMAGE_TAG}"
                     
-                    // Convert Windows workspace path to WSL path
-                    env.WSL_WORKSPACE_PATH = "/mnt/c" + env.WORKSPACE.replace('C:', '').replace('\\', '/')
-                    
-                    echo "Commit detected: ${env.IMAGE_TAG}"
-                    echo "Targeting Docker image: ${env.IMAGE_NAME}"
-                    echo "WSL Workspace path: ${env.WSL_WORKSPACE_PATH}"
+                    echo "📦 Commit: ${env.IMAGE_TAG}"
+                    echo "🐳 Image: ${env.IMAGE_NAME}"
                 }
             }
         }
@@ -36,40 +29,21 @@ pipeline {
         stage('Docker Pull') {
             steps {
                 script {
-                    echo "Pulling image: ${env.IMAGE_NAME}"
+                    echo "⬇️ Pulling image: ${env.IMAGE_NAME}"
                     
-                    // Try to pull the specific commit tag
+                    // Try to pull specific tag
                     def pullStatus = bat(
                         script: "docker pull ${env.IMAGE_NAME}",
                         returnStatus: true
                     )
                     
                     if (pullStatus != 0) {
-                        echo "Tag ${env.IMAGE_TAG} not found, fallback to latest"
+                        echo "🔁 Tag not found, fallback to latest"
                         env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:latest"
                         bat "docker pull ${env.IMAGE_NAME}"
                     } else {
-                        echo "Successfully pulled ${env.IMAGE_NAME}"
+                        echo "✅ Successfully pulled ${env.IMAGE_NAME}"
                     }
-                }
-            }
-        }
-
-        stage('Test WSL Access') {
-            steps {
-                script {
-                    echo "Testing WSL access..."
-                    
-                    // Test basic WSL command
-                    bat 'wsl echo "WSL is working from Jenkins"'
-                    
-                    // Test file access in WSL
-                    bat """
-                        wsl ls -la "${env.WSL_WORKSPACE_PATH}/"
-                    """
-                    
-                    // Test ansible version
-                    bat 'wsl /usr/bin/ansible-playbook --version'
                 }
             }
         }
@@ -77,11 +51,48 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    echo "Deploying with image: ${env.IMAGE_NAME}"
+                    echo "🚀 Deploying to Kubernetes with image: ${env.IMAGE_NAME}"
                     
-                    // Method 1: Using cd to workspace in WSL
+                    // Method 1: Update deployment directly using kubectl
                     bat """
-                        wsl bash -c "cd '${env.WSL_WORKSPACE_PATH}' && /usr/bin/ansible-playbook deploy.yml --extra-vars 'image=${env.IMAGE_NAME}'"
+                        echo "Updating deployment ${env.DEPLOYMENT_NAME} with image ${env.IMAGE_NAME}"
+                        kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} -n ${env.KUBE_NAMESPACE} --record
+                        
+                        if errorlevel 1 (
+                            echo "❌ Failed to update with specific tag, trying latest..."
+                            kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.DOCKER_USER}/${env.IMAGE_REPO}:latest -n ${env.KUBE_NAMESPACE} --record
+                        )
+                    """
+                    
+                    // Wait for rollout to complete
+                    bat """
+                        echo "⏳ Waiting for rollout to complete..."
+                        kubectl rollout status deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} --timeout=300s
+                        
+                        if errorlevel 1 (
+                            echo "⚠️ Rollout taking too long or failed"
+                            kubectl rollout undo deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE}
+                            exit 1
+                        )
+                    """
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    echo "🔍 Verifying deployment..."
+                    
+                    bat """
+                        echo "=== Current deployment status ==="
+                        kubectl get deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} -o wide
+                        
+                        echo "=== Pods status ==="
+                        kubectl get pods -n ${env.KUBE_NAMESPACE} -l app=${env.DEPLOYMENT_NAME}
+                        
+                        echo "=== Current image ==="
+                        kubectl get deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].image}'
                     """
                 }
             }
@@ -90,21 +101,43 @@ pipeline {
 
     post {
         success {
-            echo "Deployment completed successfully!"
+            echo "🎉 Deployment completed successfully!"
+            
+            script {
+                // Show final status
+                bat """
+                    echo "=== Final Status ==="
+                    kubectl get deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE}
+                    kubectl rollout history deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE}
+                """
+            }
         }
         failure {
-            echo "Deployment failed. Check Jenkins logs."
+            echo "💥 Deployment failed!"
+            
             script {
                 // Debug information
-                echo "Debug info:"
-                echo "IMAGE_NAME: ${env.IMAGE_NAME}"
-                echo "WORKSPACE: ${env.WORKSPACE}"
-                echo "WSL_WORKSPACE_PATH: ${env.WSL_WORKSPACE_PATH}"
-                
-                bat "wsl pwd"
-                bat "wsl whoami"
-                bat "docker images | findstr donlocal"
+                bat """
+                    echo "=== Debug Info ==="
+                    echo "Image used: ${env.IMAGE_NAME}"
+                    echo "Deployment: ${env.DEPLOYMENT_NAME}"
+                    
+                    echo "=== Current Pods ==="
+                    kubectl get pods -n ${env.KUBE_NAMESPACE}
+                    
+                    echo "=== Deployment Events ==="
+                    kubectl describe deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} | findstr Events
+                    
+                    echo "=== Pod Logs (last deployment) ==="
+                    for /f "tokens=1" %%i in ('kubectl get pods -n ${env.KUBE_NAMESPACE} -l app^=${env.DEPLOYMENT_NAME} --sort-by=.metadata.creationTimestamp -o name ^| findstr /v "No resources" ^| head -1') do (
+                        kubectl logs %%i -n ${env.KUBE_NAMESPACE} --tail=50
+                    )
+                """
             }
+        }
+        always {
+            echo "🧹 Cleaning up..."
+            // You can add cleanup steps here if needed
         }
     }
 }
