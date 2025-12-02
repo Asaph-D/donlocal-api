@@ -46,9 +46,7 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 echo "Deploying with image: ${IMAGE_NAME}"
-                powershell """
-                wsl /usr/bin/ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars "image=${IMAGE_NAME}"
-                """
+                powershell "wsl /usr/bin/ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars image=${IMAGE_NAME}"
             }
         }
 
