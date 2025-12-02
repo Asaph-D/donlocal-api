@@ -15,12 +15,17 @@ pipeline {
                 checkout scm
 
                 script {
-                    // Extraire le commit SHA correctement sur Windows
-                    IMAGE_TAG = powershell(returnStdout: true, script: 'git rev-parse HEAD').trim()
+                    // Alternative method to get commit SHA on Windows
+                    def commitHash = bat(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                    IMAGE_TAG = commitHash
                     IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:${IMAGE_TAG}"
 
                     echo "Commit detected: ${IMAGE_TAG}"
                     echo "Targeting Docker image: ${IMAGE_NAME}"
+                    
+                    // Store in environment for use in all stages
+                    env.IMAGE_NAME = IMAGE_NAME
+                    env.IMAGE_TAG = IMAGE_TAG
                 }
             }
         }
@@ -28,16 +33,15 @@ pipeline {
         stage('Docker Pull') {
             steps {
                 script {
-                    echo "Pulling image: ${IMAGE_NAME}"
+                    echo "Pulling image: ${env.IMAGE_NAME}"
 
-                    def status = powershell(returnStatus: true, script: "docker pull ${IMAGE_NAME}")
-
-                    if (status != 0) {
+                    try {
+                        bat "docker pull ${env.IMAGE_NAME}"
+                        echo "Successfully pulled ${env.IMAGE_NAME}"
+                    } catch (Exception e) {
                         echo "Tag not found, fallback to latest"
-                        IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
-                        powershell "docker pull ${IMAGE_NAME}"
-                    } else {
-                        echo "Successfully pulled ${IMAGE_NAME}"
+                        env.IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
+                        bat "docker pull ${env.IMAGE_NAME}"
                     }
                 }
             }
@@ -45,8 +49,18 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                echo "Deploying with image: ${IMAGE_NAME}"
-                powershell "wsl /usr/bin/ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars image=${IMAGE_NAME}"
+                script {
+                    echo "Deploying with image: ${env.IMAGE_NAME}"
+                    
+                    // Verify Ansible playbook exists
+                    def playbookPath = "${env.WORKSPACE}\\deploy.yml"
+                    echo "Playbook path: ${playbookPath}"
+                    
+                    // Run Ansible via WSL
+                    bat """
+                        wsl /usr/bin/ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars "image=${env.IMAGE_NAME}"
+                    """
+                }
             }
         }
 
@@ -58,6 +72,9 @@ pipeline {
         }
         failure {
             echo "Deployment failed. Check Jenkins logs."
+            // Add diagnostic commands
+            bat "docker images | findstr donlocal"
+            bat "wsl --version"
         }
     }
 }
