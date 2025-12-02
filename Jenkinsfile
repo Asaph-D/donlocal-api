@@ -4,28 +4,27 @@ pipeline {
     environment {
         DOCKER_USER = "asaphkouokam"
         IMAGE_REPO = "donlocal-api"
-        IMAGE_TAG = ""
-        IMAGE_NAME = ""
     }
 
     stages {
-
         stage('Checkout') {
             steps {
                 checkout scm
-
+                
                 script {
-                    // Alternative method to get commit SHA on Windows
-                    def commitHash = bat(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    IMAGE_TAG = commitHash
-                    IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:${IMAGE_TAG}"
-
-                    echo "Commit detected: ${IMAGE_TAG}"
-                    echo "Targeting Docker image: ${IMAGE_NAME}"
+                    // Get commit hash - capture only the hash without command text
+                    def commitOutput = bat(script: 'git rev-parse HEAD', returnStdout: true).trim()
                     
-                    // Store in environment for use in all stages
-                    env.IMAGE_NAME = IMAGE_NAME
-                    env.IMAGE_TAG = IMAGE_TAG
+                    // Extract just the hash (remove the command line from output)
+                    def lines = commitOutput.split('\n')
+                    def commitHash = lines[lines.length - 1].trim()
+                    
+                    // Store in environment variables
+                    env.IMAGE_TAG = commitHash
+                    env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:${env.IMAGE_TAG}"
+                    
+                    echo "Commit detected: ${env.IMAGE_TAG}"
+                    echo "Targeting Docker image: ${env.IMAGE_NAME}"
                 }
             }
         }
@@ -34,14 +33,19 @@ pipeline {
             steps {
                 script {
                     echo "Pulling image: ${env.IMAGE_NAME}"
-
-                    try {
+                    
+                    // Try to pull the specific commit tag
+                    def pullStatus = bat(
+                        script: "docker pull ${env.IMAGE_NAME}",
+                        returnStatus: true
+                    )
+                    
+                    if (pullStatus != 0) {
+                        echo "Tag ${env.IMAGE_TAG} not found, fallback to latest"
+                        env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:latest"
                         bat "docker pull ${env.IMAGE_NAME}"
+                    } else {
                         echo "Successfully pulled ${env.IMAGE_NAME}"
-                    } catch (Exception e) {
-                        echo "Tag not found, fallback to latest"
-                        env.IMAGE_NAME = "${DOCKER_USER}/${IMAGE_REPO}:latest"
-                        bat "docker pull ${env.IMAGE_NAME}"
                     }
                 }
             }
@@ -52,10 +56,6 @@ pipeline {
                 script {
                     echo "Deploying with image: ${env.IMAGE_NAME}"
                     
-                    // Verify Ansible playbook exists
-                    def playbookPath = "${env.WORKSPACE}\\deploy.yml"
-                    echo "Playbook path: ${playbookPath}"
-                    
                     // Run Ansible via WSL
                     bat """
                         wsl /usr/bin/ansible-playbook '/mnt/c/ProgramData/Jenkins/.jenkins/workspace/donlocal-api-deploy-pipeline/deploy.yml' --extra-vars "image=${env.IMAGE_NAME}"
@@ -63,7 +63,6 @@ pipeline {
                 }
             }
         }
-
     }
 
     post {
@@ -72,9 +71,14 @@ pipeline {
         }
         failure {
             echo "Deployment failed. Check Jenkins logs."
-            // Add diagnostic commands
-            bat "docker images | findstr donlocal"
-            bat "wsl --version"
+            script {
+                // Run diagnostic commands safely
+                try {
+                    bat "docker images | findstr donlocal"
+                } catch (Exception e) {
+                    echo "Failed to list docker images: ${e.message}"
+                }
+            }
         }
     }
 }
