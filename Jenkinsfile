@@ -15,10 +15,10 @@ pipeline {
                 checkout scm
                 
                 script {
-                    env.COMMIT_HASH = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:latest"
+                    env.IMAGE_TAG = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                    env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:${env.IMAGE_TAG}"
                     
-                    echo "📦 Commit: ${env.COMMIT_HASH}"
+                    echo "📦 Commit: ${env.IMAGE_TAG}"
                     echo "🐳 Image: ${env.IMAGE_NAME}"
                 }
             }
@@ -29,8 +29,8 @@ pipeline {
                 script {
                     echo "🔧 Vérification/Création du déploiement..."
                     
-                    // Créer ou mettre à jour le déploiement
                     sh """
+                        # Créer ou mettre à jour le déploiement avec le port
                         cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: Deployment
@@ -53,25 +53,12 @@ spec:
         image: ${env.DOCKER_USER}/${env.IMAGE_REPO}:latest
         ports:
         - containerPort: ${env.SERVICE_PORT.toInteger()}
-        env:
-        - name: NODE_ENV
-          value: "production"
-        - name: DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: donlocal-db-secret
-              key: database-url
         imagePullPolicy: Always
 EOF
-                    """
-                    
-                    // Créer le service s'il n'existe pas
-                    sh """
+
+                        # Créer le service si nécessaire
                         if ! kubectl get service ${env.DEPLOYMENT_NAME} >/dev/null 2>&1; then
-                            kubectl expose deployment ${env.DEPLOYMENT_NAME} \\
-                                --type=NodePort \\
-                                --port=${env.SERVICE_PORT} \\
-                                --target-port=${env.SERVICE_PORT}
+                            kubectl expose deployment ${env.DEPLOYMENT_NAME} --type=NodePort --port=${env.SERVICE_PORT}
                         fi
                     """
                 }
@@ -82,7 +69,16 @@ EOF
             steps {
                 script {
                     echo "⬇️ Pull de l'image: ${env.IMAGE_NAME}"
-                    sh "docker pull ${env.IMAGE_NAME}"
+                    
+                    def status = sh(script: "docker pull ${env.IMAGE_NAME}", returnStatus: true)
+                    
+                    if (status != 0) {
+                        echo "🔁 Tag non trouvé, utilisation de 'latest'"
+                        env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:latest"
+                        sh "docker pull ${env.IMAGE_NAME}"
+                    } else {
+                        echo "✅ Image pull réussie: ${env.IMAGE_NAME}"
+                    }
                 }
             }
         }
@@ -93,97 +89,66 @@ EOF
                     echo "🚀 Déploiement avec l'image: ${env.IMAGE_NAME}"
                     
                     sh """
-                        # Mettre à jour l'image du déploiement
-                        kubectl set image deployment/${env.DEPLOYMENT_NAME} \\
-                            ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} \\
-                            -n ${env.KUBE_NAMESPACE}
+                        # Mettre à jour l'image
+                        kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} -n ${env.KUBE_NAMESPACE}
                         
-                        # Attendre le rollout
-                        sleep 15
-                        kubectl rollout status deployment/${env.DEPLOYMENT_NAME} \\
-                            -n ${env.KUBE_NAMESPACE} \\
-                            --timeout=300s
+                        # Attendre avec plus de patience (l'application Express met du temps à démarrer)
+                        sleep 10
+                        kubectl rollout status deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} --timeout=180s
                         
                         # Vérifier les logs
-                        echo "=== Logs de démarrage ==="
-                        sleep 10
-                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=50 2>/dev/null || echo "Pas encore de logs"
+                        echo "=== Logs de l'application ==="
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=20 --follow || echo "Pas de logs disponibles"
                     """
                 }
             }
         }
 
-        stage('Setup Simple Access') {
+        stage('Setup Ingress') {
             steps {
                 script {
-                    echo '🔗 Configuration d\'accès simple...'
-                    
-                    sh """
-                        # Vérifier si le secret de base de données existe
-                        if ! kubectl get secret donlocal-db-secret 2>/dev/null; then
-                            echo "⚠️ Création du secret de base de données par défaut..."
-                            kubectl create secret generic donlocal-db-secret \\
-                                --from-literal=database-url=postgres://localhost:5432/donlocal
+                    echo '🌐 Configuration Ingress...'
+                    sh '''
+                        # Vérifier si ingress est activé
+                        minikube addons list -p donlocal | grep ingress
+                        
+                        # Appliquer l'ingress
+                        cat <<EOF | kubectl apply -f -
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+        name: donlocal-api-ingress
+        spec:
+        rules:
+        - http:
+            paths:
+            - path: /
+                pathType: Prefix
+                backend:
+                service:
+                    name: donlocal-api
+                    port:
+                    number: 80
+        EOF
+                        
+                        # Obtenir l'IP de l'ingress
+                        echo "Attente de l'assignation de l'IP..."
+                        sleep 10
+                        
+                        INGRESS_IP=$(kubectl get ingress donlocal-api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                        
+                        if [ -z "$INGRESS_IP" ]; then
+                            # Pour minikube, utiliser l'IP du minikube
+                            INGRESS_IP=$(minikube ip -p donlocal 2>/dev/null || echo "localhost")
                         fi
                         
-                        # Créer un service sur le port 80
-                        cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: donlocal-api-web
-spec:
-  selector:
-    app: ${env.DEPLOYMENT_NAME}
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: ${env.SERVICE_PORT}
-  type: ClusterIP
-EOF
-                        
-                        # Créer un ingress simple
-                        cat <<EOF | kubectl apply -f -
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ${env.DEPLOYMENT_NAME}-ingress
-spec:
-  rules:
-  - http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: donlocal-api-web
-            port:
-              number: 80
-EOF
-                        
-                        # Attendre un peu
-                        sleep 20
-                        
-                        # Afficher les informations d'accès
                         echo "================================================"
-                        echo "🌐 INFORMATIONS D'ACCÈS"
+                        echo "🌐 ACCÈS VIA INGRESS :"
                         echo "================================================"
-                        
-                        # 1. Port-forward
-                        echo "1. Accès Port-Forward:"
-                        echo "   kubectl port-forward svc/donlocal-api-web 8080:80"
-                        echo "   URL: http://localhost:8080"
-                        echo ""
-                        
-                        # 2. NodePort
-                        echo "2. Accès NodePort:"
-                        NODE_PORT=\$(kubectl get svc ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "N/A")
-                        echo "   Port: \$NODE_PORT"
-                        echo "   URL: http://<IP-DU-SERVEUR>:\$NODE_PORT"
-                        echo ""
-                        
+                        echo "URL: http://${INGRESS_IP}"
+                        echo "Test: curl http://${INGRESS_IP}"
                         echo "================================================"
-                    """
+                    '''
                 }
             }
         }
@@ -192,36 +157,44 @@ EOF
             steps {
                 script {
                     echo '🏥 Vérification de la santé de l\'application...'
-                    
-                    sh """
-                        # Attendre que l'application démarre
-                        echo "⏳ Attente du démarrage de l'application..."
+                    sh '''
                         sleep 30
                         
                         # Vérifier le statut du pod
-                        echo "=== Statut des Pods ==="
-                        kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o wide
+                        kubectl get pods -l app=donlocal-api -o wide
                         
-                        # Vérifier si le pod est en CrashLoopBackOff
-                        POD_STATUS=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "RUNNING")
+                        # Afficher les logs
+                        kubectl logs deployment/donlocal-api --tail=30
                         
-                        if [ "\$POD_STATUS" = "CrashLoopBackOff" ]; then
-                            echo "❌ L'application est en CrashLoopBackOff"
-                            echo "=== Logs d'erreur ==="
-                            kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=100
-                            echo ""
-                            echo "🔍 Solution rapide : Créer un secret de base de données"
-                            echo "   kubectl create secret generic donlocal-db-secret \\\\"
-                            echo "     --from-literal=database-url=postgres://user:password@host:5432/dbname"
-                            exit 1
+                        # Récupérer le nom du pod
+                        POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}')
+                        echo "Pod: ${POD_NAME}"
+                        
+                        # Récupérer le port NodePort
+                        NODE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
+                        
+                        # Méthode 1: Essayer d'obtenir l'IP du node
+                        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "")
+                        
+                        if [ -z "${NODE_IP}" ]; then
+                            # Méthode 2: Obtenir l'IP externe
+                            NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "")
                         fi
                         
-                        # Vérifier les logs
-                        echo "=== Logs récents ==="
-                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30 2>/dev/null || echo "Pas encore de logs"
+                        if [ -z "${NODE_IP}" ]; then
                         
-                        echo "✅ Vérification terminée"
-                    """
+                        # Méthode 3: Utiliser localhost pour minikube
+                            NODE_IP="localhost"
+                            echo "⚠️ Utilisation de localhost. Pour accéder depuis l'extérieur, utilisez l'IP du serveur."
+                        fi
+                        
+                        echo "📱 API disponible sur: http://${NODE_IP}:${NODE_PORT}"
+                        echo "Pour tester: curl http://${NODE_IP}:${NODE_PORT}"
+                        
+                        # Essayer un curl de test
+                        echo "🔍 Test de connexion à l'API..."
+                        curl -f http://${NODE_IP}:${NODE_PORT} || echo "⚠️ Le test curl a échoué, mais l'application peut être en cours de démarrage"
+                    '''
                 }
             }
         }
@@ -230,71 +203,37 @@ EOF
     post {
         success {
             echo "🎉 Déploiement réussi!"
-            
-            script {
-                sh """
-                    echo "================================================"
-                    echo "📊 RÉSUMÉ DU DÉPLOIEMENT"
-                    echo "================================================"
-                    echo "Application: ${env.DEPLOYMENT_NAME}"
-                    echo "Image: ${env.IMAGE_NAME}"
-                    echo "Port: ${env.SERVICE_PORT}"
-                    echo "Commit: ${env.COMMIT_HASH}"
-                    echo ""
-                    echo "📡 POUR ACCÉDER À L'APPLICATION:"
-                    echo ""
-                    echo "1. Méthode la plus simple:"
-                    echo "   kubectl port-forward svc/donlocal-api-web 8080:80"
-                    echo "   Puis ouvrir: http://localhost:8080"
-                    echo ""
-                    echo "2. Via NodePort:"
-                    NODE_PORT=\$(kubectl get svc ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null)
-                    echo "   Port: \${NODE_PORT:-N/A}"
-                    echo "   URL: http://<ip-du-serveur>:\${NODE_PORT:-N/A}"
-                    echo ""
-                    echo "================================================"
-                """
-            }
         }
         failure {
             echo "💥 Déploiement échoué"
             
             script {
                 sh """
-                    echo "=== DÉBOGAGE ==="
+                    echo "=== DÉBOGAGE DÉTAILLÉ ==="
                     
-                    # 1. Statut des pods
-                    echo "1. Statut des pods:"
-                    kubectl get pods -l app=${env.DEPLOYMENT_NAME}
-                    
-                    # 2. Décrire le pod
-                    echo ""
-                    echo "2. Détails du pod:"
+                    # Décrire le pod
                     kubectl describe pods -l app=${env.DEPLOYMENT_NAME}
                     
-                    # 3. Logs
-                    echo ""
-                    echo "3. Logs de l'application:"
-                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=100 2>/dev/null || echo "Pas de logs disponibles"
+                    # Logs détaillés
+                    echo "=== LOGS COMPLETS ==="
+                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --previous || true
+                    kubectl logs deployment/${env.DEPLOYMENT_NAME} || true
                     
-                    # 4. Événements
-                    echo ""
-                    echo "4. Événements récents:"
-                    kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by='.lastTimestamp' 2>/dev/null
+                    # Événements
+                    echo "=== ÉVÉNEMENTS ==="
+                    kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by='.lastTimestamp'
                     
-                    # 5. Services
-                    echo ""
-                    echo "5. Services:"
-                    kubectl get svc -l app=${env.DEPLOYMENT_NAME}
-                    
-                    echo ""
-                    echo "=== ACTION REQUISE ==="
-                    echo "1. Créez le secret de base de données:"
-                    echo "   kubectl create secret generic donlocal-db-secret \\"
-                    echo "     --from-literal=database-url=postgres://user:pass@host:5432/dbname"
-                    echo ""
-                    echo "2. Redémarrez le déploiement:"
-                    echo "   kubectl rollout restart deployment/${env.DEPLOYMENT_NAME}"
+                    # Exécuter une commande dans le pod pour diagnostiquer
+                    echo "=== DIAGNOSTIC INTERNE ==="
+                    POD_NAME=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+                    if [ ! -z "\$POD_NAME" ]; then
+                        echo "État du conteneur:"
+                        kubectl exec \$POD_NAME -- ps aux || true
+                        echo "Ports écoutés:"
+                        kubectl exec \$POD_NAME -- netstat -tlnp || true
+                        echo "Variables d'environnement:"
+                        kubectl exec \$POD_NAME -- env || true
+                    fi
                 """
             }
         }
