@@ -107,28 +107,45 @@ EOF
         stage('Check Application Health') {
             steps {
                 script {
-                    echo "🏥 Vérification de la santé de l'application..."
-                    
-                    sh """
-                        # Attendre que l'application soit prête
+                    echo '🏥 Vérification de la santé de l\'application...'
+                    sh '''
                         sleep 30
                         
-                        # Vérifier l'état du pod
-                        kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o wide
+                        # Vérifier le statut du pod
+                        kubectl get pods -l app=donlocal-api -o wide
                         
-                        # Vérifier les logs récents
-                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30 || true
+                        # Afficher les logs
+                        kubectl logs deployment/donlocal-api --tail=30
                         
-                        # Tester l'accès interne
-                        POD_NAME=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].metadata.name}')
-                        echo "Pod: \$POD_NAME"
+                        # Récupérer le nom du pod
+                        POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}')
+                        echo "Pod: ${POD_NAME}"
                         
-                        # Obtenir l'URL d'accès
-                        NODE_PORT=\$(kubectl get service ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30000")
-                        NODE_IP=\$(minikube ip -p donlocal 2>/dev/null || echo "localhost")
-                        echo "📱 API disponible sur: http://\${NODE_IP}:\${NODE_PORT}"
-                        echo "Pour tester: curl http://\${NODE_IP}:\${NODE_PORT}"
-                    """
+                        # Récupérer le port NodePort
+                        NODE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
+                        
+                        # Méthode 1: Essayer d'obtenir l'IP du node
+                        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "")
+                        
+                        if [ -z "${NODE_IP}" ]; then
+                            # Méthode 2: Obtenir l'IP externe
+                            NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "")
+                        fi
+                        
+                        if [ -z "${NODE_IP}" ]; then
+                        
+                        # Méthode 3: Utiliser localhost pour minikube
+                            NODE_IP="localhost"
+                            echo "⚠️ Utilisation de localhost. Pour accéder depuis l'extérieur, utilisez l'IP du serveur."
+                        fi
+                        
+                        echo "📱 API disponible sur: http://${NODE_IP}:${NODE_PORT}"
+                        echo "Pour tester: curl http://${NODE_IP}:${NODE_PORT}"
+                        
+                        # Essayer un curl de test
+                        echo "🔍 Test de connexion à l'API..."
+                        curl -f http://${NODE_IP}:${NODE_PORT} || echo "⚠️ Le test curl a échoué, mais l'application peut être en cours de démarrage"
+                    '''
                 }
             }
         }
