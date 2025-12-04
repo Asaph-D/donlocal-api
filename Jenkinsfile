@@ -98,8 +98,57 @@ EOF
                         
                         # Vérifier les logs
                         echo "=== Logs de l'application ==="
-                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=20 --follow --timeout=30s || echo "Pas de logs disponibles"
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=20 --follow || echo "Pas de logs disponibles"
                     """
+                }
+            }
+        }
+
+        stage('Setup Ingress') {
+            steps {
+                script {
+                    echo '🌐 Configuration Ingress...'
+                    sh '''
+                        # Vérifier si ingress est activé
+                        minikube addons list -p donlocal | grep ingress
+                        
+                        # Appliquer l'ingress
+                        cat <<EOF | kubectl apply -f -
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+        name: donlocal-api-ingress
+        spec:
+        rules:
+        - http:
+            paths:
+            - path: /
+                pathType: Prefix
+                backend:
+                service:
+                    name: donlocal-api
+                    port:
+                    number: 80
+        EOF
+                        
+                        # Obtenir l'IP de l'ingress
+                        echo "Attente de l'assignation de l'IP..."
+                        sleep 10
+                        
+                        INGRESS_IP=$(kubectl get ingress donlocal-api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                        
+                        if [ -z "$INGRESS_IP" ]; then
+                            # Pour minikube, utiliser l'IP du minikube
+                            INGRESS_IP=$(minikube ip -p donlocal 2>/dev/null || echo "localhost")
+                        fi
+                        
+                        echo "================================================"
+                        echo "🌐 ACCÈS VIA INGRESS :"
+                        echo "================================================"
+                        echo "URL: http://${INGRESS_IP}"
+                        echo "Test: curl http://${INGRESS_IP}"
+                        echo "================================================"
+                    '''
                 }
             }
         }
