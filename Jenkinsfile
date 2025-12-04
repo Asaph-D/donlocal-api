@@ -98,7 +98,7 @@ EOF
                         
                         # Vérifier les logs
                         echo "=== Logs de l'application ==="
-                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=20 --follow || echo "Pas de logs disponibles"
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=20 || echo "Pas de logs disponibles"
                     """
                 }
             }
@@ -109,44 +109,83 @@ EOF
                 script {
                     echo '🌐 Configuration Ingress...'
                     sh '''
-                        # Vérifier si ingress est activé
-                        minikube addons list -p donlocal | grep ingress
+                        # Activer ingress sur minikube si pas déjà fait
+                        minikube addons enable ingress -p donlocal 2>/dev/null || echo "Ingress déjà activé ou erreur"
+                        
+                        # Attendre que l'ingress controller soit prêt
+                        sleep 15
+                        
+                        # Vérifier si le service expose le port 80
+                        if ! kubectl get service ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.ports[?(@.port==80)].port}' &>/dev/null; then
+                            echo "⚠️ Le service n'expose pas le port 80, création d'un service web..."
+                            cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: donlocal-api-web
+spec:
+  selector:
+    app: donlocal-api
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: ${env.SERVICE_PORT}
+  type: ClusterIP
+EOF
+                            SERVICE_NAME="donlocal-api-web"
+                        else
+                            SERVICE_NAME="${env.DEPLOYMENT_NAME}"
+                        fi
                         
                         # Appliquer l'ingress
                         cat <<EOF | kubectl apply -f -
-        apiVersion: networking.k8s.io/v1
-        kind: Ingress
-        metadata:
-        name: donlocal-api-ingress
-        spec:
-        rules:
-        - http:
-            paths:
-            - path: /
-                pathType: Prefix
-                backend:
-                service:
-                    name: donlocal-api
-                    port:
-                    number: 80
-        EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: donlocal-api-ingress
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ${SERVICE_NAME}
+            port:
+              number: 80
+EOF
                         
                         # Obtenir l'IP de l'ingress
-                        echo "Attente de l'assignation de l'IP..."
-                        sleep 10
+                        echo "Attente de l'assignation de l'IP (peut prendre 1-2 minutes)..."
+                        sleep 30
                         
-                        INGRESS_IP=$(kubectl get ingress donlocal-api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                        MAX_RETRIES=10
+                        INGRESS_IP=""
                         
-                        if [ -z "$INGRESS_IP" ]; then
+                        for i in \$(seq 1 \$MAX_RETRIES); do
+                            INGRESS_IP=\$(kubectl get ingress donlocal-api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+                            if [ ! -z "\$INGRESS_IP" ]; then
+                                break
+                            fi
+                            echo "Tentative \$i/\$MAX_RETRIES: IP non assignée..."
+                            sleep 10
+                        done
+                        
+                        if [ -z "\$INGRESS_IP" ]; then
                             # Pour minikube, utiliser l'IP du minikube
-                            INGRESS_IP=$(minikube ip -p donlocal 2>/dev/null || echo "localhost")
+                            INGRESS_IP=\$(minikube ip -p donlocal 2>/dev/null || echo "")
+                            if [ -z "\$INGRESS_IP" ]; then
+                                INGRESS_IP="localhost"
+                                echo "⚠️ Utilisation de localhost pour minikube"
+                            fi
                         fi
                         
                         echo "================================================"
                         echo "🌐 ACCÈS VIA INGRESS :"
                         echo "================================================"
-                        echo "URL: http://${INGRESS_IP}"
-                        echo "Test: curl http://${INGRESS_IP}"
+                        echo "URL: http://\${INGRESS_IP}"
+                        echo "Test: curl -f http://\${INGRESS_IP} || echo 'Test échoué - application peut être en cours de démarrage'"
                         echo "================================================"
                     '''
                 }
@@ -161,39 +200,53 @@ EOF
                         sleep 30
                         
                         # Vérifier le statut du pod
-                        kubectl get pods -l app=donlocal-api -o wide
+                        kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o wide
                         
-                        # Afficher les logs
-                        kubectl logs deployment/donlocal-api --tail=30
+                        # Afficher les logs récents
+                        echo "=== Logs récents ==="
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30
                         
-                        # Récupérer le nom du pod
-                        POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}')
-                        echo "Pod: ${POD_NAME}"
+                        # Vérifier si l'application est en cours d'exécution
+                        echo "=== Vérification de l'application ==="
+                        POD_NAME=$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+                        
+                        if [ ! -z "$POD_NAME" ]; then
+                            echo "Pod: $POD_NAME"
+                            
+                            # Vérifier si le conteneur est prêt
+                            READY=$(kubectl get pod $POD_NAME -o jsonpath='{.status.containerStatuses[0].ready}')
+                            echo "Conteneur prêt: $READY"
+                            
+                            if [ "$READY" = "true" ]; then
+                                # Tester l'application à l'intérieur du pod
+                                echo "Test interne de l'application..."
+                                kubectl exec $POD_NAME -- sh -c "curl -s http://localhost:${env.SERVICE_PORT} || echo 'Application non accessible depuis l\'intérieur'" || true
+                            fi
+                        fi
                         
                         # Récupérer le port NodePort
-                        NODE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
+                        NODE_PORT=$(kubectl get service ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
                         
-                        # Méthode 1: Essayer d'obtenir l'IP du node
-                        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "")
-                        
-                        if [ -z "${NODE_IP}" ]; then
-                            # Méthode 2: Obtenir l'IP externe
-                            NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "")
+                        if [ ! -z "$NODE_PORT" ]; then
+                            # Méthode 1: Essayer d'obtenir l'IP du node
+                            NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "")
+                            
+                            if [ -z "$NODE_IP" ]; then
+                                # Méthode 2: Utiliser localhost
+                                NODE_IP="localhost"
+                            fi
+                            
+                            echo "📱 API disponible sur NodePort: http://\${NODE_IP}:\${NODE_PORT}"
+                            echo "Pour tester: curl http://\${NODE_IP}:\${NODE_PORT}"
                         fi
                         
-                        if [ -z "${NODE_IP}" ]; then
+                        # Afficher les services pour vérification
+                        echo "=== Services ==="
+                        kubectl get svc -l app=${env.DEPLOYMENT_NAME}
                         
-                        # Méthode 3: Utiliser localhost pour minikube
-                            NODE_IP="localhost"
-                            echo "⚠️ Utilisation de localhost. Pour accéder depuis l'extérieur, utilisez l'IP du serveur."
-                        fi
-                        
-                        echo "📱 API disponible sur: http://${NODE_IP}:${NODE_PORT}"
-                        echo "Pour tester: curl http://${NODE_IP}:${NODE_PORT}"
-                        
-                        # Essayer un curl de test
-                        echo "🔍 Test de connexion à l'API..."
-                        curl -f http://${NODE_IP}:${NODE_PORT} || echo "⚠️ Le test curl a échoué, mais l'application peut être en cours de démarrage"
+                        # Afficher l'ingress
+                        echo "=== Ingress ==="
+                        kubectl get ingress donlocal-api-ingress 2>/dev/null || echo "Ingress non trouvé"
                     '''
                 }
             }
@@ -203,6 +256,39 @@ EOF
     post {
         success {
             echo "🎉 Déploiement réussi!"
+            
+            script {
+                sh '''
+                    # Afficher les informations d'accès finales
+                    echo "================================================"
+                    echo "📊 INFORMATIONS D'ACCÈS FINALES"
+                    echo "================================================"
+                    
+                    # Ingress
+                    INGRESS_IP=$(kubectl get ingress donlocal-api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+                    if [ -z "$INGRESS_IP" ]; then
+                        INGRESS_IP=$(minikube ip -p donlocal 2>/dev/null || echo "localhost")
+                    fi
+                    echo "Ingress URL: http://$INGRESS_IP"
+                    
+                    # NodePort
+                    NODE_PORT=$(kubectl get service ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "N/A")
+                    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "localhost")
+                    echo "NodePort URL: http://$NODE_IP:$NODE_PORT"
+                    
+                    # ClusterIP interne
+                    CLUSTER_IP=$(kubectl get service ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "N/A")
+                    echo "ClusterIP interne: $CLUSTER_IP:${env.SERVICE_PORT}"
+                    
+                    # Port-forward option
+                    echo ""
+                    echo "Pour un accès local via port-forward:"
+                    echo "kubectl port-forward service/${env.DEPLOYMENT_NAME} 8080:${env.SERVICE_PORT}"
+                    echo "Puis accédez à: http://localhost:8080"
+                    
+                    echo "================================================"
+                '''
+            }
         }
         failure {
             echo "💥 Déploiement échoué"
@@ -216,24 +302,34 @@ EOF
                     
                     # Logs détaillés
                     echo "=== LOGS COMPLETS ==="
-                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --previous || true
-                    kubectl logs deployment/${env.DEPLOYMENT_NAME} || true
+                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=100 || true
+                    
+                    # Vérifier les conteneurs précédents
+                    echo "=== LOGS CONTENEURS PRÉCÉDENTS ==="
+                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --previous --tail=50 2>/dev/null || echo "Pas de conteneurs précédents"
                     
                     # Événements
-                    echo "=== ÉVÉNEMENTS ==="
-                    kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by='.lastTimestamp'
+                    echo "=== ÉVÉNEMENTS RÉCENTS ==="
+                    kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by='.lastTimestamp' --tail=20
                     
                     # Exécuter une commande dans le pod pour diagnostiquer
                     echo "=== DIAGNOSTIC INTERNE ==="
                     POD_NAME=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
                     if [ ! -z "\$POD_NAME" ]; then
-                        echo "État du conteneur:"
-                        kubectl exec \$POD_NAME -- ps aux || true
-                        echo "Ports écoutés:"
-                        kubectl exec \$POD_NAME -- netstat -tlnp || true
-                        echo "Variables d'environnement:"
-                        kubectl exec \$POD_NAME -- env || true
+                        echo "Décrire le pod:"
+                        kubectl describe pod \$POD_NAME
+                        
+                        echo "État du pod:"
+                        kubectl get pod \$POD_NAME -o jsonpath='{.status.phase}{" - "}{.status.containerStatuses[0].state}{" - ready:"}{.status.containerStatuses[0].ready}'
+                        
+                        echo "Ports dans le pod:"
+                        kubectl get pod \$POD_NAME -o jsonpath='{.spec.containers[0].ports[0].containerPort}' || echo "Ports non définis"
                     fi
+                    
+                    echo "=== CONFIGURATION DE L'APPLICATION ==="
+                    echo "IMAGE: ${env.IMAGE_NAME}"
+                    echo "PORT: ${env.SERVICE_PORT}"
+                    echo "DÉPLOIEMENT: ${env.DEPLOYMENT_NAME}"
                 """
             }
         }
