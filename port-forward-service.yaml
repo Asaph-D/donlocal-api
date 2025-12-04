@@ -1,0 +1,13 @@
+# port-forward-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: donlocal-api-direct
+spec:
+  selector:
+    app: donlocal-api
+  ports:
+    - protocol: TCP
+      port: 3000  # Port externe
+      targetPort: 3000  # Port du conteneur
+  type: LoadBalancer  # Ou NodePort si LoadBalancer ne marche pas

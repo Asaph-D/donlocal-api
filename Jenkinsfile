@@ -104,6 +104,52 @@ EOF
             }
         }
 
+        stage('Create Direct Access') {
+            steps {
+                script {
+                    echo '🔗 Création d\'un accès direct...'
+                    sh '''
+                        # Appliquer le service direct
+                        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+        name: donlocal-api-direct
+        spec:
+        selector:
+            app: donlocal-api
+        ports:
+            - protocol: TCP
+            port: 3000
+            targetPort: 3000
+        type: NodePort
+        EOF
+
+                        # Récupérer le port NodePort attribué
+                        DIRECT_PORT=$(kubectl get svc donlocal-api-direct -o jsonpath='{.spec.ports[0].nodePort}')
+                        
+                        # Démarrer un port-forward vers CE service
+                        kubectl port-forward svc/donlocal-api-direct 3000:3000 --address=0.0.0.0 &
+                        PF_PID=$!
+                        
+                        # Récupérer l'IP publique du serveur
+                        SERVER_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
+                        
+                        echo "================================================"
+                        echo "🌐 ACCÈS DIRECT À L'APPLICATION :"
+                        echo "================================================"
+                        echo "Local: http://localhost:3000"
+                        echo "Réseau: http://${SERVER_IP}:3000"
+                        echo "================================================"
+                        
+                        # Garder ce processus actif
+                        sleep 3600  # 1 heure
+                        kill $PF_PID
+                    '''
+                }
+            }
+        }
+        
         stage('Check Application Health') {
             steps {
                 script {
@@ -133,7 +179,7 @@ EOF
                         fi
                         
                         if [ -z "${NODE_IP}" ]; then
-                        
+
                         # Méthode 3: Utiliser localhost pour minikube
                             NODE_IP="localhost"
                             echo "⚠️ Utilisation de localhost. Pour accéder depuis l'extérieur, utilisez l'IP du serveur."
