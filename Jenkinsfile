@@ -16,7 +16,6 @@ pipeline {
                 
                 script {
                     env.COMMIT_HASH = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    // Utiliser uniquement 'latest' pour éviter le problème de tag
                     env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:latest"
                     
                     echo "📦 Commit: ${env.COMMIT_HASH}"
@@ -83,7 +82,7 @@ EOF
             steps {
                 script {
                     echo "⬇️ Pull de l'image: ${env.IMAGE_NAME}"
-                    sh "docker pull ${env.IMAGE_NAME} || echo '⚠️ Image non trouvée, le déploiement utilisera l\'image existante'"
+                    sh "docker pull ${env.IMAGE_NAME}"
                 }
             }
         }
@@ -107,8 +106,8 @@ EOF
                         
                         # Vérifier les logs
                         echo "=== Logs de démarrage ==="
-                        sleep 10  # Donner du temps à l'application de démarrer
-                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=50 || echo "Pas encore de logs"
+                        sleep 10
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=50 2>/dev/null || echo "Pas encore de logs"
                     """
                 }
             }
@@ -120,7 +119,14 @@ EOF
                     echo '🔗 Configuration d\'accès simple...'
                     
                     sh """
-                        # Créer un service sur le port 80 pour l'ingress
+                        # Vérifier si le secret de base de données existe
+                        if ! kubectl get secret donlocal-db-secret 2>/dev/null; then
+                            echo "⚠️ Création du secret de base de données par défaut..."
+                            kubectl create secret generic donlocal-db-secret \\
+                                --from-literal=database-url=postgres://localhost:5432/donlocal
+                        fi
+                        
+                        # Créer un service sur le port 80
                         cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Service
@@ -128,7 +134,7 @@ metadata:
   name: donlocal-api-web
 spec:
   selector:
-    app: donlocal-api
+    app: ${env.DEPLOYMENT_NAME}
   ports:
     - protocol: TCP
       port: 80
@@ -141,9 +147,7 @@ EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: donlocal-api-ingress
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+  name: ${env.DEPLOYMENT_NAME}-ingress
 spec:
   rules:
   - http:
@@ -165,24 +169,17 @@ EOF
                         echo "🌐 INFORMATIONS D'ACCÈS"
                         echo "================================================"
                         
-                        # 1. Port-forward simple
-                        echo "1. Accès Port-Forward (immédiat):"
+                        # 1. Port-forward
+                        echo "1. Accès Port-Forward:"
                         echo "   kubectl port-forward svc/donlocal-api-web 8080:80"
                         echo "   URL: http://localhost:8080"
                         echo ""
                         
                         # 2. NodePort
+                        echo "2. Accès NodePort:"
                         NODE_PORT=\$(kubectl get svc ${env.DEPLOYMENT_NAME} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "N/A")
-                        if [ "\$NODE_PORT" != "N/A" ]; then
-                            echo "2. Accès NodePort:"
-                            echo "   Port: \$NODE_PORT"
-                            echo "   URL: http://<IP-DU-SERVEUR>:\$NODE_PORT"
-                            echo ""
-                        fi
-                        
-                        # 3. Ingress
-                        echo "3. Ingress (si configuré):"
-                        kubectl get ingress donlocal-api-ingress 2>/dev/null || echo "   Ingress en cours de configuration..."
+                        echo "   Port: \$NODE_PORT"
+                        echo "   URL: http://<IP-DU-SERVEUR>:\$NODE_PORT"
                         echo ""
                         
                         echo "================================================"
@@ -199,38 +196,29 @@ EOF
                     sh """
                         # Attendre que l'application démarre
                         echo "⏳ Attente du démarrage de l'application..."
-                        sleep 45
+                        sleep 30
                         
                         # Vérifier le statut du pod
                         echo "=== Statut des Pods ==="
                         kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o wide
                         
                         # Vérifier si le pod est en CrashLoopBackOff
-                        POD_STATUS=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+                        POD_STATUS=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "RUNNING")
                         
                         if [ "\$POD_STATUS" = "CrashLoopBackOff" ]; then
                             echo "❌ L'application est en CrashLoopBackOff"
                             echo "=== Logs d'erreur ==="
                             kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=100
                             echo ""
-                            echo "🔍 Problème probable : Configuration de la base de données"
-                            echo "   Vérifiez votre fichier src/config/database.js"
-                            echo "   Assurez-vous que DATABASE_URL est défini"
+                            echo "🔍 Solution rapide : Créer un secret de base de données"
+                            echo "   kubectl create secret generic donlocal-db-secret \\\\"
+                            echo "     --from-literal=database-url=postgres://user:password@host:5432/dbname"
                             exit 1
                         fi
                         
                         # Vérifier les logs
                         echo "=== Logs récents ==="
-                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30 || echo "Pas encore de logs"
-                        
-                        # Tester l'application
-                        echo "=== Test de l'application ==="
-                        POD_NAME=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-                        
-                        if [ ! -z "\$POD_NAME" ]; then
-                            echo "Test interne sur le pod: \$POD_NAME"
-                            kubectl exec \$POD_NAME -- sh -c "timeout 10 curl -s http://localhost:${env.SERVICE_PORT} || echo 'Application non encore prête'" || true
-                        fi
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30 2>/dev/null || echo "Pas encore de logs"
                         
                         echo "✅ Vérification terminée"
                     """
@@ -282,7 +270,7 @@ EOF
                     # 2. Décrire le pod
                     echo ""
                     echo "2. Détails du pod:"
-                    kubectl describe pods -l app=${env.DEPLOYMENT_NAME} | head -100
+                    kubectl describe pods -l app=${env.DEPLOYMENT_NAME}
                     
                     # 3. Logs
                     echo ""
@@ -292,7 +280,7 @@ EOF
                     # 4. Événements
                     echo ""
                     echo "4. Événements récents:"
-                    kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by=.lastTimestamp 2>/dev/null | tail -10 || echo "Aucun événement"
+                    kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by='.lastTimestamp' 2>/dev/null
                     
                     # 5. Services
                     echo ""
@@ -300,17 +288,13 @@ EOF
                     kubectl get svc -l app=${env.DEPLOYMENT_NAME}
                     
                     echo ""
-                    echo "=== CAUSE PROBABLE ==="
-                    echo "❌ L'application Node.js a une erreur de configuration"
-                    echo "   Fichier problématique: src/config/database.js"
-                    echo "   Erreur: DATABASE_URL est undefined"
+                    echo "=== ACTION REQUISE ==="
+                    echo "1. Créez le secret de base de données:"
+                    echo "   kubectl create secret generic donlocal-db-secret \\"
+                    echo "     --from-literal=database-url=postgres://user:pass@host:5432/dbname"
                     echo ""
-                    echo "=== SOLUTION ==="
-                    echo "1. Vérifiez votre configuration de base de données"
-                    echo "2. Assurez-vous que la variable DATABASE_URL est définie"
-                    echo "3. Testez localement d'abord:"
-                    echo "   docker run -e DATABASE_URL=postgres://... -p 5000:5000 ${env.IMAGE_NAME}"
-                    echo "   curl http://localhost:5000"
+                    echo "2. Redémarrez le déploiement:"
+                    echo "   kubectl rollout restart deployment/${env.DEPLOYMENT_NAME}"
                 """
             }
         }
