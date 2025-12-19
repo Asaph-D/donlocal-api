@@ -13,11 +13,11 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                
+
                 script {
                     env.IMAGE_TAG = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
                     env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:${env.IMAGE_TAG}"
-                    
+
                     echo "📦 Commit: ${env.IMAGE_TAG}"
                     echo "🐳 Image: ${env.IMAGE_NAME}"
                 }
@@ -28,9 +28,9 @@ pipeline {
             steps {
                 script {
                     echo "🔧 Vérification/Création du déploiement..."
-                    
+
                     sh """
-                        # Créer ou mettre à jour le déploiement avec le port
+                        # Créer ou mettre à jour le déploiement avec le bon tag
                         cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: Deployment
@@ -50,7 +50,7 @@ spec:
     spec:
       containers:
       - name: ${env.DEPLOYMENT_NAME}
-        image: ${env.DOCKER_USER}/${env.IMAGE_REPO}:latest
+        image: ${env.IMAGE_NAME}  # <-- Utilisation de IMAGE_NAME (tag spécifique)
         ports:
         - containerPort: ${env.SERVICE_PORT.toInteger()}
         imagePullPolicy: Always
@@ -69,13 +69,12 @@ EOF
             steps {
                 script {
                     echo "⬇️ Pull de l'image: ${env.IMAGE_NAME}"
-                    
+
                     def status = sh(script: "docker pull ${env.IMAGE_NAME}", returnStatus: true)
-                    
+
                     if (status != 0) {
-                        echo "🔁 Tag non trouvé, utilisation de 'latest'"
-                        env.IMAGE_NAME = "${env.DOCKER_USER}/${env.IMAGE_REPO}:latest"
-                        sh "docker pull ${env.IMAGE_NAME}"
+                        echo "❌ Échec du pull de l'image ${env.IMAGE_NAME}. Vérifiez que l'image existe sur Docker Hub."
+                        error "Image non disponible. Construisez et poussez l'image avant de relancer le pipeline."
                     } else {
                         echo "✅ Image pull réussie: ${env.IMAGE_NAME}"
                     }
@@ -87,15 +86,15 @@ EOF
             steps {
                 script {
                     echo "🚀 Déploiement avec l'image: ${env.IMAGE_NAME}"
-                    
+
                     sh """
                         # Mettre à jour l'image
                         kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} -n ${env.KUBE_NAMESPACE}
-                        
-                        # Attendre avec plus de patience (l'application Express met du temps à démarrer)
+
+                        # Attendre avec plus de patience
                         sleep 10
-                        kubectl rollout status deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} --timeout=180s
-                        
+                        kubectl rollout status deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} --timeout=300s
+
                         # Vérifier les logs
                         echo "=== Logs de l'application ==="
                         kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=20 --follow || echo "Pas de logs disponibles"
@@ -110,38 +109,37 @@ EOF
                     echo '🏥 Vérification de la santé de l\'application...'
                     sh '''
                         sleep 30
-                        
+
                         # Vérifier le statut du pod
                         kubectl get pods -l app=donlocal-api -o wide
-                        
+
                         # Afficher les logs
                         kubectl logs deployment/donlocal-api --tail=30
-                        
+
                         # Récupérer le nom du pod
                         POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}')
                         echo "Pod: ${POD_NAME}"
-                        
+
                         # Récupérer le port NodePort
                         NODE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
-                        
+
                         # Méthode 1: Essayer d'obtenir l'IP du node
                         NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "")
-                        
+
                         if [ -z "${NODE_IP}" ]; then
                             # Méthode 2: Obtenir l'IP externe
                             NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "")
                         fi
-                        
+
                         if [ -z "${NODE_IP}" ]; then
-                        
                         # Méthode 3: Utiliser localhost pour minikube
                             NODE_IP="localhost"
                             echo "⚠️ Utilisation de localhost. Pour accéder depuis l'extérieur, utilisez l'IP du serveur."
                         fi
-                        
+
                         echo "📱 API disponible sur: http://${NODE_IP}:${NODE_PORT}"
                         echo "Pour tester: curl http://${NODE_IP}:${NODE_PORT}"
-                        
+
                         # Essayer un curl de test
                         echo "🔍 Test de connexion à l'API..."
                         curl -f http://${NODE_IP}:${NODE_PORT} || echo "⚠️ Le test curl a échoué, mais l'application peut être en cours de démarrage"
@@ -157,23 +155,23 @@ EOF
         }
         failure {
             echo "💥 Déploiement échoué"
-            
+
             script {
                 sh """
                     echo "=== DÉBOGAGE DÉTAILLÉ ==="
-                    
+
                     # Décrire le pod
                     kubectl describe pods -l app=${env.DEPLOYMENT_NAME}
-                    
+
                     # Logs détaillés
                     echo "=== LOGS COMPLETS ==="
                     kubectl logs deployment/${env.DEPLOYMENT_NAME} --previous || true
                     kubectl logs deployment/${env.DEPLOYMENT_NAME} || true
-                    
+
                     # Événements
                     echo "=== ÉVÉNEMENTS ==="
                     kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by='.lastTimestamp'
-                    
+
                     # Exécuter une commande dans le pod pour diagnostiquer
                     echo "=== DIAGNOSTIC INTERNE ==="
                     POD_NAME=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
