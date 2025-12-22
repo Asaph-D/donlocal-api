@@ -31,10 +31,16 @@ pipeline {
                 script {
                     echo "🔧 Vérification du déploiement..."
 
-                    sh """
-                        # Le déploiement est déjà créé par la configuration Kubernetes
-                        kubectl get deployment ${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE}
-                    """
+                                        // Use Ansible playbook for build/push/deploy (run under bash)
+                                        sh '''
+                                                if ! command -v ansible-playbook >/dev/null 2>&1; then
+                                                    echo "❗ ansible-playbook not found on agent. Please install Ansible."
+                                                    exit 1
+                                                fi
+
+                                                # Run the playbook under bash to avoid /bin/sh substitution issues
+                                                bash -lc "ansible-playbook deploy.yml -i localhost, --extra-vars 'IMAGE_NAME=${IMAGE_NAME} K8S_MANIFEST=kubernetes-config.yaml'"
+                                        '''
                 }
             }
         }
