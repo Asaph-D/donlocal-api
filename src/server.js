@@ -5,6 +5,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
 const { connectDB, sequelize } = require('./config/database');
 const User = require('./models/User');
 const Resource = require('./models/Resource');
@@ -60,6 +61,18 @@ app.get('/api/health', (req, res) => {
     success: true,
     message: 'API is healthy',
     timestamp: new Date().toISOString(),
+  });
+});
+
+// Serve a simple landing page at `/` (returns index.html at project root if present)
+app.use(express.static(path.join(__dirname, '..')));
+app.get('/', (req, res) => {
+  const indexPath = path.join(__dirname, '..', 'index.html');
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      // fallback to health endpoint
+      return res.redirect('/api/health');
+    }
   });
 });
 
