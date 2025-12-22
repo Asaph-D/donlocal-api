@@ -59,7 +59,6 @@ pipeline {
                 script {
                     echo "⬇️ Tentative de pull de l'image: ${env.IMAGE_NAME}"
 
-                    // Essayer de pull l'image, mais ne pas échouer si impossible
                     sh """
                         if docker pull ${env.IMAGE_NAME} 2>/dev/null; then
                             echo "✅ Image pull réussie"
@@ -84,7 +83,6 @@ pipeline {
                         echo "  Déploiement: ${env.DEPLOYMENT_NAME}"
                         echo "  Namespace: ${env.KUBE_NAMESPACE}"
                         
-                        # Exécuter le playbook Ansible
                         ansible-playbook deploy.yml \
                           --extra-vars "IMAGE_NAME=${env.IMAGE_NAME}"
                     """
@@ -98,7 +96,7 @@ pipeline {
                     echo '🏥 Vérification de la santé...'
                     
                     // Attendre un peu pour laisser l'application démarrer
-                    sleep 15  # Augmenté à 15 secondes
+                    sleep 15
                     
                     sh '''
                         echo "=== État du déploiement ==="
@@ -114,12 +112,10 @@ pipeline {
                         
                         echo ""
                         echo "=== Test de connexion ==="
-                        # Tenter de vérifier la santé via curl dans un pod
                         POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
                         if [ -n "$POD_NAME" ]; then
                             echo "Test de santé sur le pod: $POD_NAME"
-                            # Essayer plusieurs fois car l'application peut mettre du temps à démarrer
-                            for i in {1..5}; do
+                            for i in 1 2 3 4 5; do
                                 if kubectl exec $POD_NAME -- curl -s -f http://localhost:5000/api/health >/dev/null 2>&1; then
                                     echo "✅ Application en bonne santé"
                                     exit 0
@@ -144,7 +140,6 @@ pipeline {
                 echo ""
                 echo "=== INFORMATIONS DE CONNEXION ==="
                 
-                # Obtenir l'adresse IP
                 if MINIKUBE_IP=$(minikube ip 2>/dev/null); then
                     echo "Minikube IP: $MINIKUBE_IP"
                 elif MINIKUBE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[?(@.type=='InternalIP')].address}" 2>/dev/null); then
@@ -154,7 +149,6 @@ pipeline {
                     echo "IP: $MINIKUBE_IP (localhost)"
                 fi
                 
-                # Obtenir le port du service
                 API_PORT=$(kubectl get service donlocal-api -o jsonpath="{.spec.ports[0].nodePort}" 2>/dev/null)
                 if [ -n "$API_PORT" ]; then
                     echo "🌐 API URL: http://${MINIKUBE_IP}:${API_PORT}"
@@ -202,10 +196,11 @@ pipeline {
         
         always {
             echo "🧹 Pipeline terminé"
-            // Correction de l'erreur de syntaxe - supprimer la ligne problématique
             sh '''
                 echo "Date: $(date)"
-                echo "Statut: ${currentBuild.result}"
+                echo "Job: '${JOB_NAME}'"
+                echo "Build: '${BUILD_NUMBER}'"
+                echo "Image: '${IMAGE_NAME}'"
             '''
         }
     }
