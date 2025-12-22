@@ -24,24 +24,50 @@ pipeline {
             }
         }
 
-        stage('Vérifier et Préparer') {
+        stage('Vérifier les outils') {
             steps {
                 script {
                     echo "🔍 Vérification des outils..."
                     
-                    // Vérifier qu'Ansible est installé
-                    sh '''
-                        which ansible || { 
-                            echo "❌ Ansible n'est pas installé"
-                            echo "Installation d'Ansible..."
-                            sudo apt-get update && sudo apt-get install -y ansible
-                        }
-                        ansible --version
+                    sh """
+                        # Vérifier qu'Ansible est installé
+                        if ! command -v ansible-playbook >/dev/null 2>&1; then
+                            echo "❌ ansible-playbook non trouvé"
+                            exit 1
+                        fi
                         
-                        # Vérifier que kubectl est disponible
-                        which kubectl || { echo "❌ kubectl n'est pas installé"; exit 1; }
-                        kubectl version --client --short
-                    '''
+                        # Vérifier que le playbook existe
+                        if [ ! -f "deploy.yml" ]; then
+                            echo "❌ deploy.yml non trouvé dans le dépôt"
+                            exit 1
+                        fi
+                        
+                        # Vérifier kubectl
+                        if ! command -v kubectl >/dev/null 2>&1; then
+                            echo "❌ kubectl non trouvé"
+                            exit 1
+                        fi
+                        
+                        echo "✅ Tous les outils sont disponibles"
+                    """
+                }
+            }
+        }
+
+        stage('Pull Docker Image') {
+            steps {
+                script {
+                    echo "⬇️ Tentative de pull de l'image: ${env.IMAGE_NAME}"
+
+                    // Essayer de pull l'image, mais ne pas échouer si impossible
+                    sh """
+                        if docker pull ${env.IMAGE_NAME} 2>/dev/null; then
+                            echo "✅ Image pull réussie"
+                        else
+                            echo "⚠️ Impossible de pull l'image depuis Docker Hub"
+                            echo "Kubernetes la téléchargera directement lors du déploiement"
+                        fi
+                    """
                 }
             }
         }
@@ -51,105 +77,52 @@ pipeline {
                 script {
                     echo "🚀 Déploiement avec Ansible..."
                     
-                    // Créer un playbook Ansible temporaire si nécessaire
-                    sh '''
-                        cat > /tmp/deploy-playbook.yml << 'EOF'
----
-- name: Déployer donlocal-api sur Kubernetes
-  hosts: localhost
-  connection: local
-  gather_facts: no
-  
-  vars:
-    image_name: "{{ lookup('env', 'IMAGE_NAME') }}"
-    deployment_name: "{{ lookup('env', 'DEPLOYMENT_NAME') }}"
-    namespace: "{{ lookup('env', 'KUBE_NAMESPACE') }}"
-  
-  tasks:
-    - name: Vérifier l'accès au cluster Kubernetes
-      command: kubectl cluster-info
-      register: cluster_info
-      changed_when: false
-      failed_when: false
-      
-    - debug:
-        msg: "📋 Déploiement de {{ image_name }} dans {{ namespace }}"
-        
-    - name: Vérifier si le déploiement existe
-      command: kubectl get deployment {{ deployment_name }} -n {{ namespace }}
-      register: deployment_check
-      ignore_errors: yes
-      changed_when: false
-      
-    - name: Appliquer la configuration Kubernetes si nécessaire
-      command: kubectl apply -f kubernetes-config.yaml
-      when: deployment_check.rc != 0
-      
-    - name: Mettre à jour l'image du déploiement
-      command: |
-        kubectl set image deployment/{{ deployment_name }} \
-          {{ deployment_name }}={{ image_name }} \
-          -n {{ namespace }}
-      register: update_result
-      changed_when: "'image updated' in update_result.stdout or 'updated' in update_result.stdout"
-      
-    - name: Attendre le déploiement
-      command: |
-        kubectl rollout status deployment/{{ deployment_name }} \
-          -n {{ namespace }} \
-          --timeout=300s
-      register: rollout_status
-      until: rollout_status.rc == 0
-      retries: 5
-      delay: 10
-      
-    - name: Récupérer les informations des pods
-      command: kubectl get pods -l app={{ deployment_name }} -n {{ namespace }} -o wide
-      register: pods_info
-      changed_when: false
-      
-    - name: Afficher le résultat
-      debug:
-        msg:
-          - "✅ Déploiement terminé avec succès"
-          - "📦 Image: {{ image_name }}"
-          - "📊 Pods déployés:"
-          - "{{ pods_info.stdout_lines | join('\n') }}"
-EOF
-                    '''
-                    
-                    // Exécuter le playbook Ansible
                     sh """
-                        echo "🎯 Exécution du playbook Ansible..."
-                        ansible-playbook /tmp/deploy-playbook.yml \
-                          --extra-vars "IMAGE_NAME=${env.IMAGE_NAME} DEPLOYMENT_NAME=${env.DEPLOYMENT_NAME} KUBE_NAMESPACE=${env.KUBE_NAMESPACE}"
+                        echo "🎯 Exécution du playbook deploy.yml"
+                        echo "📋 Paramètres:"
+                        echo "  Image: ${env.IMAGE_NAME}"
+                        echo "  Déploiement: ${env.DEPLOYMENT_NAME}"
+                        echo "  Namespace: ${env.KUBE_NAMESPACE}"
+                        
+                        # Exécuter le playbook Ansible
+                        ansible-playbook deploy.yml \
+                          --extra-vars "IMAGE_NAME=${env.IMAGE_NAME}"
                     """
                 }
             }
         }
 
-        stage('Vérifier la santé') {
+        stage('Vérifier la santé de l\'application') {
             steps {
                 script {
-                    echo "🏥 Vérification de la santé de l'application..."
+                    echo '🏥 Vérification de la santé...'
+                    
+                    // Attendre un peu pour laisser l'application démarrer
+                    sleep 10
                     
                     sh '''
-                        # Attendre quelques secondes pour que l'application soit prête
-                        sleep 10
+                        echo "=== État du déploiement ==="
+                        kubectl get deployment donlocal-api -o wide
                         
-                        echo "=== Pods ==="
+                        echo ""
+                        echo "=== Pods en cours d\'exécution ==="
                         kubectl get pods -l app=donlocal-api -o wide
                         
                         echo ""
-                        echo "=== Logs récents ==="
-                        kubectl logs deployment/donlocal-api --tail=20 --timestamps=true || echo "Pas encore de logs"
+                        echo "=== Derniers logs ==="
+                        kubectl logs deployment/donlocal-api --tail=10 2>/dev/null || echo "Logs non disponibles"
                         
                         echo ""
-                        echo "=== Test de santé ==="
-                        # Essayer d'accéder au endpoint de santé
-                        API_POD=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}')
-                        if [ -n "$API_POD" ]; then
-                            kubectl exec $API_POD -- curl -s http://localhost:5000/api/health && echo "✅ Santé OK" || echo "⚠️ Santé non vérifiée"
+                        echo "=== Test de connexion ==="
+                        # Tenter de vérifier la santé via curl dans un pod
+                        POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
+                        if [ -n "$POD_NAME" ]; then
+                            echo "Test de santé sur le pod: $POD_NAME"
+                            if kubectl exec $POD_NAME -- curl -s -f http://localhost:5000/api/health >/dev/null 2>&1; then
+                                echo "✅ Application en bonne santé"
+                            else
+                                echo "⚠️ Application non encore prête"
+                            fi
                         fi
                     '''
                 }
@@ -159,19 +132,37 @@ EOF
 
     post {
         success {
-            echo "🎉 Déploiement réussi avec Ansible!"
+            echo "🎉 Déploiement réussi!"
             sh '''
                 echo ""
                 echo "=== INFORMATIONS DE CONNEXION ==="
-                MINIKUBE_IP=$(minikube ip 2>/dev/null || kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "localhost")
-                API_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
-                echo "🌐 API URL: http://${MINIKUBE_IP}:${API_PORT}"
+                
+                # Obtenir l'adresse IP
+                if MINIKUBE_IP=$(minikube ip 2>/dev/null); then
+                    echo "Minikube IP: $MINIKUBE_IP"
+                elif MINIKUBE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[?(@.type=='InternalIP')].address}" 2>/dev/null); then
+                    echo "Cluster IP: $MINIKUBE_IP"
+                else
+                    MINIKUBE_IP="localhost"
+                    echo "IP: $MINIKUBE_IP (localhost)"
+                fi
+                
+                # Obtenir le port du service
+                API_PORT=$(kubectl get service donlocal-api -o jsonpath="{.spec.ports[0].nodePort}" 2>/dev/null)
+                if [ -n "$API_PORT" ]; then
+                    echo "🌐 API URL: http://${MINIKUBE_IP}:${API_PORT}"
+                    echo "🩺 Endpoint santé: http://${MINIKUBE_IP}:${API_PORT}/api/health"
+                else
+                    echo "🌐 API: Service non exposé ou port non disponible"
+                fi
+                
+                echo ""
                 echo "🐘 PostgreSQL: ${MINIKUBE_IP}:5432"
                 echo "👤 DB User: postgres"
                 echo "🔑 DB Password: 1234"
                 echo "🗄️  Database: donlocal"
                 echo ""
-                echo "🕒 Image déployée: ${IMAGE_NAME}"
+                echo "📊 Image déployée: ${IMAGE_NAME}"
             '''
         }
         failure {
@@ -181,28 +172,34 @@ EOF
                 sh """
                     echo "=== DÉBOGAGE DÉTAILLÉ ==="
                     echo ""
-                    echo "=== Pods ==="
-                    kubectl get pods --all-namespaces || true
+                    echo "=== État des pods ==="
+                    kubectl get pods --all-namespaces 2>/dev/null || true
                     echo ""
-                    echo "=== Événements ==="
-                    kubectl get events --sort-by='.lastTimestamp' --field-selector involvedObject.name=donlocal-api || true
+                    echo "=== Événements récents ==="
+                    kubectl get events --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
                     echo ""
                     echo "=== Logs PostgreSQL ==="
-                    kubectl logs deployment/postgres --tail=20 || true
+                    kubectl logs deployment/postgres --tail=10 2>/dev/null || true
                     echo ""
                     echo "=== Logs API ==="
-                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=50 || true
+                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30 2>/dev/null || true
                     echo ""
-                    echo "=== Description Deployment API ==="
-                    kubectl describe deployment ${env.DEPLOYMENT_NAME} || true
+                    echo "=== Description du déploiement ==="
+                    kubectl describe deployment ${env.DEPLOYMENT_NAME} 2>/dev/null || true
+                    echo ""
+                    echo "=== Description des pods API ==="
+                    kubectl describe pods -l app=${env.DEPLOYMENT_NAME} 2>/dev/null || true
                 """
             }
         }
         
         always {
-            echo "🧹 Nettoyage..."
-            // Supprimer le fichier temporaire
-            sh 'rm -f /tmp/deploy-playbook.yml || true'
+            echo "🧹 Pipeline terminé"
+            // Nettoyage optionnel
+            sh '''
+                echo "Date: $(date)"
+                echo "Durée du pipeline: ${currentBuild.durationString}"
+            '''
         }
     }
 }

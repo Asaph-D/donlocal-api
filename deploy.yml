@@ -1,5 +1,6 @@
+# deploy.yml
 ---
-- name: Déployer donlocal-api sur Kubernetes
+- name: Déployer l'API donlocal sur Kubernetes
   hosts: localhost
   connection: local
   gather_facts: no
@@ -8,49 +9,55 @@
     image_name: "{{ lookup('env', 'IMAGE_NAME') | default('asaphkouokam/donlocal-api:latest') }}"
     deployment_name: "donlocal-api"
     namespace: "default"
-    kube_manifest: "kubernetes-config.yaml"
   
   tasks:
     - name: Afficher les informations de déploiement
       debug:
-        msg: "🎯 Déploiement de {{ image_name }} sur Kubernetes"
+        msg: "🎯 Déploiement de l'image: {{ image_name }}"
         
-    - name: Vérifier l'accès au cluster
+    - name: Vérifier l'accès au cluster Kubernetes
       command: kubectl cluster-info
       register: cluster_check
       changed_when: false
+      failed_when: cluster_check.rc != 0
       
-    - name: Appliquer les manifestes Kubernetes
-      command: kubectl apply -f {{ kube_manifest }}
-      register: apply_result
-      changed_when: "'configured' in apply_result.stdout or 'created' in apply_result.stdout"
+    - name: Vérifier si le déploiement existe
+      command: kubectl get deployment {{ deployment_name }} -n {{ namespace }}
+      register: deployment_exists
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Appliquer la configuration si nécessaire
+      command: kubectl apply -f kubernetes-config.yaml
+      when: deployment_exists.rc != 0
       
     - name: Mettre à jour l'image du déploiement
       command: |
         kubectl set image deployment/{{ deployment_name }} \
           {{ deployment_name }}={{ image_name }} \
           -n {{ namespace }}
-      register: image_update
-      changed_when: "'updated' in image_update.stdout"
+      register: update_result
+      changed_when: "'image updated' in update_result.stdout or 'updated' in update_result.stdout"
       
     - name: Attendre le rollout
       command: |
         kubectl rollout status deployment/{{ deployment_name }} \
           -n {{ namespace }} \
           --timeout=300s
-      register: rollout
-      until: rollout.rc == 0
-      retries: 6
+      register: rollout_status
+      until: rollout_status.rc == 0
+      retries: 5
       delay: 10
       
-    - name: Vérifier l'état des pods
+    - name: Vérifier les pods
       command: kubectl get pods -l app={{ deployment_name }} -n {{ namespace }} -o wide
-      register: pods
+      register: pods_info
       changed_when: false
       
     - name: Journaliser le résultat
       debug:
         msg:
-          - "✅ Déploiement terminé"
-          - "📊 Pods:"
-          - "{{ pods.stdout_lines | join('\n  ') }}"
+          - "✅ Déploiement terminé avec succès"
+          - "📦 Image: {{ image_name }}"
+          - "📊 Pods déployés:"
+          - "{{ pods_info.stdout_lines | join('\n  ') }}"
