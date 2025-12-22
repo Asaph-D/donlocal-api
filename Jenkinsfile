@@ -62,8 +62,8 @@ pipeline {
                         
                         echo "Pod PostgreSQL: \$POSTGRES_POD"
                         
-                        # Attendre que PostgreSQL soit vraiment prêt
-                        kubectl exec -it \$POSTGRES_POD -n ${env.KUBE_NAMESPACE} -- bash -c 'for i in {1..30}; do pg_isready -U postgres && break || sleep 2; done'
+                            # Attendre que PostgreSQL soit vraiment prêt
+                            kubectl exec \$POSTGRES_POD -n ${env.KUBE_NAMESPACE} -- bash -c 'for i in {1..30}; do pg_isready -U postgres && break || sleep 2; done'
                         
                         echo "✅ PostgreSQL est prêt"
                     """
@@ -138,7 +138,9 @@ pipeline {
                         kubectl get endpoints postgres-service
                         
                         MINIKUBE_IP=$(minikube ip)
-                        SERVICE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
+                            # Try to get Minikube IP, fallback to node internal IP or localhost
+                            MINIKUBE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || minikube ip 2>/dev/null || echo "localhost")
+                            SERVICE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
                         
                         echo ""
                         echo "📱 API disponible sur: http://${MINIKUBE_IP}:${SERVICE_PORT}"
@@ -155,7 +157,7 @@ pipeline {
             sh '''
                 echo ""
                 echo "=== INFORMATIONS DE CONNEXION ==="
-                MINIKUBE_IP=$(minikube ip)
+                    MINIKUBE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || minikube ip 2>/dev/null || echo "localhost")
                 API_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
                 echo "🌐 API URL: http://${MINIKUBE_IP}:${API_PORT}"
                 echo "🐘 PostgreSQL: ${MINIKUBE_IP}:5432"
