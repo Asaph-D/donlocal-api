@@ -62,15 +62,16 @@ pipeline {
                 script {
                     echo "🚀 Déploiement avec l'image: ${env.IMAGE_NAME}"
 
-                    // Use Ansible playbook for build/push/deploy
-                    sh '''
-                        if ! command -v ansible-playbook >/dev/null 2>&1; then
-                          echo "❗ ansible-playbook not found on agent. Please install Ansible."
-                          exit 1
-                        fi
+                                        // Use Ansible playbook for build/push/deploy (run under bash)
+                                        sh '''
+                                                if ! command -v ansible-playbook >/dev/null 2>&1; then
+                                                    echo "❗ ansible-playbook not found on agent. Please install Ansible."
+                                                    exit 1
+                                                fi
 
-                        ansible-playbook deploy.yml -i localhost, --extra-vars "IMAGE_NAME=${env.IMAGE_NAME} K8S_MANIFEST=kubernetes-config.yaml"
-                    '''
+                                                # Run the playbook under bash to avoid /bin/sh substitution issues
+                                                bash -lc "ansible-playbook deploy.yml -i localhost, --extra-vars 'IMAGE_NAME=${IMAGE_NAME} K8S_MANIFEST=kubernetes-config.yaml'"
+                                        '''
                 }
             }
         }
