@@ -98,7 +98,7 @@ pipeline {
                     echo '🏥 Vérification de la santé...'
                     
                     // Attendre un peu pour laisser l'application démarrer
-                    sleep 10
+                    sleep 15  # Augmenté à 15 secondes
                     
                     sh '''
                         echo "=== État du déploiement ==="
@@ -118,11 +118,18 @@ pipeline {
                         POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
                         if [ -n "$POD_NAME" ]; then
                             echo "Test de santé sur le pod: $POD_NAME"
-                            if kubectl exec $POD_NAME -- curl -s -f http://localhost:5000/api/health >/dev/null 2>&1; then
-                                echo "✅ Application en bonne santé"
-                            else
-                                echo "⚠️ Application non encore prête"
-                            fi
+                            # Essayer plusieurs fois car l'application peut mettre du temps à démarrer
+                            for i in {1..5}; do
+                                if kubectl exec $POD_NAME -- curl -s -f http://localhost:5000/api/health >/dev/null 2>&1; then
+                                    echo "✅ Application en bonne santé"
+                                    exit 0
+                                fi
+                                echo "⏳ Tentative $i/5..."
+                                sleep 5
+                            done
+                            echo "⚠️ Application non encore prête après 25 secondes"
+                        else
+                            echo "❌ Aucun pod trouvé"
                         fi
                     '''
                 }
@@ -163,6 +170,9 @@ pipeline {
                 echo "🗄️  Database: donlocal"
                 echo ""
                 echo "📊 Image déployée: ${IMAGE_NAME}"
+                echo ""
+                echo "📈 État:"
+                kubectl get pods -l app=donlocal-api --no-headers | wc -l | xargs echo "Nombre de pods en cours d'exécution:"
             '''
         }
         failure {
@@ -186,19 +196,16 @@ pipeline {
                     echo ""
                     echo "=== Description du déploiement ==="
                     kubectl describe deployment ${env.DEPLOYMENT_NAME} 2>/dev/null || true
-                    echo ""
-                    echo "=== Description des pods API ==="
-                    kubectl describe pods -l app=${env.DEPLOYMENT_NAME} 2>/dev/null || true
                 """
             }
         }
         
         always {
             echo "🧹 Pipeline terminé"
-            // Nettoyage optionnel
+            // Correction de l'erreur de syntaxe - supprimer la ligne problématique
             sh '''
                 echo "Date: $(date)"
-                echo "Durée du pipeline: ${currentBuild.durationString}"
+                echo "Statut: ${currentBuild.result}"
             '''
         }
     }
