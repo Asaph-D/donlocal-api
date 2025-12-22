@@ -17,17 +17,24 @@ const app = express();
 
 // Middlewares de sécurité et performance
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_URL }));
+app.use(cors({ origin: process.env.CLIENT_URL || '*' }));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(compression());
 
-// Limiter les requêtes (100 requêtes par 15 minutes)
-const limiter = rateLimit({
-  windowMs: process.env.RATE_LIMIT_WINDOW_MS,
-  max: process.env.RATE_LIMIT_MAX_REQUESTS,
-});
-app.use(limiter);
+// Limiter les requêtes (désactivé en dev, actif en production)
+if (process.env.NODE_ENV === 'production') {
+  const limiter = rateLimit({
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000,
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1000,
+    message: 'Trop de requêtes, veuillez réessayer plus tard',
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use(limiter);
+} else {
+  console.log('⚠️  Rate limiter désactivé en mode développement');
+}
 
 // Connexion à la base de données PostgreSQL
 connectDB();
