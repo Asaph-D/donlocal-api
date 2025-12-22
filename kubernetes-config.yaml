@@ -15,7 +15,7 @@ data:
   POSTGRES_URI: "postgres://postgres:1234@postgres-service:5432/donlocal"
   CLIENT_URL: "http://localhost:3000"
   RATE_LIMIT_WINDOW_MS: "900000"
-  RATE_LIMIT_MAX_REQUESTS: "100"
+  RATE_LIMIT_MAX_REQUESTS: "1000"
 
 ---
 # Secret pour les données sensibles
@@ -118,6 +118,60 @@ spec:
     name: postgres
 
 ---
+# Job pour initialiser la base de données (s'exécute une fois avant l'API)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: donlocal-db-init
+  namespace: default
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      name: donlocal-db-init
+    spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo "⏳ Attente du service PostgreSQL pour initialisation..."
+          for i in $(seq 1 30); do
+            if nc -z postgres-service 5432; then
+              echo "✅ PostgreSQL est prêt pour initialisation"
+              exit 0
+            fi
+            echo "⏳ Tentative $i/30..."
+            sleep 2
+          done
+          echo "❌ PostgreSQL n'a pas répondu à temps"
+          exit 1
+      containers:
+      - name: db-init
+        image: asaphkouokam/donlocal-api:latest
+        imagePullPolicy: Always
+        command:
+        - node
+        - src/DBInitializer.js
+        envFrom:
+        - configMapRef:
+            name: donlocal-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: donlocal-secrets
+              key: DB_PASSWORD
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: donlocal-secrets
+              key: JWT_SECRET
+      restartPolicy: Never
+
+---
 # Deployment DonLocal API
 apiVersion: apps/v1
 kind: Deployment
@@ -141,6 +195,8 @@ spec:
       labels:
         app: donlocal-api
     spec:
+      # Dépendance : attendre que le Job d'initialisation soit complété
+      serviceAccountName: default
       initContainers:
       - name: wait-for-postgres
         image: busybox:1.35
