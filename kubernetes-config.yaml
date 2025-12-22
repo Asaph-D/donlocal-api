@@ -1,0 +1,245 @@
+---
+# ConfigMap pour les variables d'environnement
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: donlocal-config
+  namespace: default
+data:
+  NODE_ENV: "production"
+  PORT: "5000"
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_USER: "postgres"
+  DB_NAME: "donlocal"
+  POSTGRES_URI: "postgres://postgres:1234@postgres-service:5432/donlocal"
+  CLIENT_URL: "http://localhost:3000"
+  RATE_LIMIT_WINDOW_MS: "900000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+
+---
+# Secret pour les données sensibles
+apiVersion: v1
+kind: Secret
+metadata:
+  name: donlocal-secrets
+  namespace: default
+type: Opaque
+stringData:
+  DB_PASSWORD: "1234"
+  JWT_SECRET: "your_jwt_secret_key_change_in_production"
+
+---
+# PersistentVolumeClaim pour PostgreSQL
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# Deployment PostgreSQL avec persistance
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: donlocal-secrets
+              key: DB_PASSWORD
+        - name: POSTGRES_DB
+          value: "donlocal"
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U postgres
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U postgres
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+
+---
+# Service PostgreSQL (ClusterIP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432
+    name: postgres
+
+---
+# Deployment DonLocal API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: donlocal-api
+  namespace: default
+  labels:
+    app: donlocal-api
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: donlocal-api
+  template:
+    metadata:
+      labels:
+        app: donlocal-api
+    spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo "⏳ Attente du service PostgreSQL..."
+          for i in $(seq 1 30); do
+            if nc -z postgres-service 5432; then
+              echo "✅ PostgreSQL est prêt"
+              exit 0
+            fi
+            echo "⏳ Tentative $i/30..."
+            sleep 2
+          done
+          echo "❌ PostgreSQL n'a pas répondu à temps"
+          exit 1
+      containers:
+      - name: donlocal-api
+        image: asaphkouokam/donlocal-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
+          name: http
+        envFrom:
+        - configMapRef:
+            name: donlocal-config
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: donlocal-secrets
+              key: DB_PASSWORD
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: donlocal-secrets
+              key: JWT_SECRET
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+---
+# Service DonLocal API (NodePort)
+apiVersion: v1
+kind: Service
+metadata:
+  name: donlocal-api
+  namespace: default
+  labels:
+    app: donlocal-api
+spec:
+  type: NodePort
+  selector:
+    app: donlocal-api
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+    nodePort: 30080
+    name: http
+
+---
+# Ingress pour exposer l'application
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: donlocal-ingress
+  namespace: default
+spec:
+  rules:
+  - host: donlocal.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: donlocal-api
+            port:
+              number: 5000

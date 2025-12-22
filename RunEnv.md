@@ -157,3 +157,6 @@ Le pipeline fera juste :
 - `docker pull` (télécharge l'image)
 - `kubectl set image` (met à jour le déploiement)
 - `kubectl rollout status` (attend le déploiement)
+
+je crois que la règle de detection de changement dans jenkins cause problème: le risque de déclencher le pipeline alors git n'a pas encore déploiyer l'image sur docker
+je pense à la configuration des webhooks et l'utilisation de ngrok pour avoir le domaine de jenkins
