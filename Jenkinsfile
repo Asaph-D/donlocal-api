@@ -24,52 +24,7 @@ pipeline {
             }
         }
 
-        stage('Apply Kubernetes Configuration') {
-            steps {
-                script {
-                    echo "🔧 Application de la configuration Kubernetes..."
-                    sh """
-                        kubectl apply -f kubernetes-config.yaml
-                        sleep 10
-                    """
-                }
-            }
-        }
-
-        stage('Wait for PostgreSQL') {
-            steps {
-                script {
-                    echo "⏳ Attente de PostgreSQL..."
-                    sh """
-                        kubectl wait --for=condition=ready pod -l app=postgres --timeout=300s -n ${env.KUBE_NAMESPACE} || true
-                        sleep 10
-                    """
-                }
-            }
-        }
-
-        stage('Initialize Database') {
-            steps {
-                script {
-                    echo "🗄️ Initialisation de la base de données..."
-                    sh """
-                        POSTGRES_POD=\$(kubectl get pods -l app=postgres -o jsonpath='{.items[0].metadata.name}' -n ${env.KUBE_NAMESPACE})
-                        
-                        if [ -z "\$POSTGRES_POD" ]; then
-                            echo "❌ Pod PostgreSQL non trouvé"
-                            exit 1
-                        fi
-                        
-                        echo "Pod PostgreSQL: \$POSTGRES_POD"
-                        
-                            # Attendre que PostgreSQL soit vraiment prêt
-                            kubectl exec \$POSTGRES_POD -n ${env.KUBE_NAMESPACE} -- bash -c 'for i in {1..30}; do pg_isready -U postgres && break || sleep 2; done'
-                        
-                        echo "✅ PostgreSQL est prêt"
-                    """
-                }
-            }
-        }
+        // PostgreSQL availability and DB initialization are managed manually; Jenkins only pulls and deploys the image.
 
         stage('Ensure Deployment Exists') {
             steps {
@@ -134,17 +89,11 @@ pipeline {
                         kubectl get services
                         
                         echo ""
-                        echo "=== Endpoints PostgreSQL ==="
-                        kubectl get endpoints postgres-service
-                        
-                        MINIKUBE_IP=$(minikube ip)
-                            # Try to get Minikube IP, fallback to node internal IP or localhost
-                            MINIKUBE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || minikube ip 2>/dev/null || echo "localhost")
-                            SERVICE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
-                        
+                        MINIKUBE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || minikube ip 2>/dev/null || echo "localhost")
+                        SERVICE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
+
                         echo ""
                         echo "📱 API disponible sur: http://${MINIKUBE_IP}:${SERVICE_PORT}"
-                        echo "PostgreSQL disponible sur: ${MINIKUBE_IP}:5432"
                     '''
                 }
             }
