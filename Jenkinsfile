@@ -61,17 +61,13 @@ pipeline {
             steps {
                 script {
                     echo "🚀 Déploiement avec l'image: ${env.IMAGE_NAME}"
-
-                                        // Use Ansible playbook for build/push/deploy (run under bash)
-                                        sh '''
-                                                if ! command -v ansible-playbook >/dev/null 2>&1; then
-                                                    echo "❗ ansible-playbook not found on agent. Please install Ansible."
-                                                    exit 1
-                                                fi
-
-                                                # Run the playbook under bash to avoid /bin/sh substitution issues
-                                                bash -lc "ansible-playbook deploy.yml -i localhost, --extra-vars 'IMAGE_NAME=${IMAGE_NAME} K8S_MANIFEST=kubernetes-config.yaml'"
-                                        '''
+                    //kubectl ou ansible
+                    sh """
+                        kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} -n ${env.KUBE_NAMESPACE} || true
+                        sleep 10
+                        kubectl rollout status deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} --timeout=300s || true
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30 || echo "Pas de logs disponibles"
+                    """
                 }
             }
         }

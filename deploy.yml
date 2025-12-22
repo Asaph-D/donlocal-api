@@ -51,3 +51,14 @@
     - name: Show few logs from the API deployment
       shell: |
         kubectl logs deployment/donlocal-api --tail=30 || true
+
+                                        // Use Ansible playbook for build/push/deploy (run under bash)
+                                        sh '''
+                                                if ! command -v ansible-playbook >/dev/null 2>&1; then
+                                                    echo "❗ ansible-playbook not found on agent. Please install Ansible."
+                                                    exit 1
+                                                fi
+
+                                                # Run the playbook under bash to avoid /bin/sh substitution issues
+                                                bash -lc "ansible-playbook deploy.yml -i localhost, --extra-vars 'IMAGE_NAME=${IMAGE_NAME} K8S_MANIFEST=kubernetes-config.yaml'"
+                                        '''
