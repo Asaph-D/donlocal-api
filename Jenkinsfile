@@ -24,13 +24,68 @@ pipeline {
             }
         }
 
+        stage('Deploy PostgreSQL') {
+            steps {
+                script {
+                    echo "🔧 Déploiement de PostgreSQL..."
+                    sh """
+                        cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        env:
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          value: "1234"
+        - name: POSTGRES_DB
+          value: "donlocal"
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - mountPath: /var/lib/postgresql/data
+          name: postgres-storage
+      volumes:
+      - name: postgres-storage
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+spec:
+  selector:
+    app: postgres
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+EOF
+                    """
+                }
+            }
+        }
+
         stage('Ensure Deployment Exists') {
             steps {
                 script {
                     echo "🔧 Vérification/Création du déploiement..."
 
                     sh """
-                        # Créer ou mettre à jour le déploiement avec le bon tag
                         cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: Deployment
@@ -50,9 +105,22 @@ spec:
     spec:
       containers:
       - name: ${env.DEPLOYMENT_NAME}
-        image: ${env.IMAGE_NAME}  # <-- Utilisation de IMAGE_NAME (tag spécifique)
+        image: ${env.IMAGE_NAME}
         ports:
         - containerPort: ${env.SERVICE_PORT.toInteger()}
+        env:
+        - name: POSTGRES_URI
+          value: "postgres://postgres:1234@postgres-service:5432/donlocal"
+        - name: DB_HOST
+          value: "postgres-service"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "1234"
+        - name: DB_NAME
+          value: "donlocal"
         imagePullPolicy: Always
 EOF
 
@@ -88,15 +156,9 @@ EOF
                     echo "🚀 Déploiement avec l'image: ${env.IMAGE_NAME}"
 
                     sh """
-                        # Mettre à jour l'image
                         kubectl set image deployment/${env.DEPLOYMENT_NAME} ${env.DEPLOYMENT_NAME}=${env.IMAGE_NAME} -n ${env.KUBE_NAMESPACE}
-
-                        # Attendre avec plus de patience
                         sleep 10
                         kubectl rollout status deployment/${env.DEPLOYMENT_NAME} -n ${env.KUBE_NAMESPACE} --timeout=300s
-
-                        # Vérifier les logs
-                        echo "=== Logs de l'application ==="
                         kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=20 --follow || echo "Pas de logs disponibles"
                     """
                 }
@@ -109,40 +171,15 @@ EOF
                     echo '🏥 Vérification de la santé de l\'application...'
                     sh '''
                         sleep 30
-
-                        # Vérifier le statut du pod
                         kubectl get pods -l app=donlocal-api -o wide
-
-                        # Afficher les logs
                         kubectl logs deployment/donlocal-api --tail=30
 
-                        # Récupérer le nom du pod
-                        POD_NAME=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}')
-                        echo "Pod: ${POD_NAME}"
+                        SERVICE_IP="localhost"
+                        SERVICE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].port}')
 
-                        # Récupérer le port NodePort
-                        NODE_PORT=$(kubectl get service donlocal-api -o jsonpath='{.spec.ports[0].nodePort}')
-
-                        # Méthode 1: Essayer d'obtenir l'IP du node
-                        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "")
-
-                        if [ -z "${NODE_IP}" ]; then
-                            # Méthode 2: Obtenir l'IP externe
-                            NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || echo "")
-                        fi
-
-                        if [ -z "${NODE_IP}" ]; then
-                        # Méthode 3: Utiliser localhost pour minikube
-                            NODE_IP="localhost"
-                            echo "⚠️ Utilisation de localhost. Pour accéder depuis l'extérieur, utilisez l'IP du serveur."
-                        fi
-
-                        echo "📱 API disponible sur: http://${NODE_IP}:${NODE_PORT}"
-                        echo "Pour tester: curl http://${NODE_IP}:${NODE_PORT}"
-
-                        # Essayer un curl de test
-                        echo "🔍 Test de connexion à l'API..."
-                        curl -f http://${NODE_IP}:${NODE_PORT} || echo "⚠️ Le test curl a échoué, mais l'application peut être en cours de démarrage"
+                        echo "📱 API disponible sur: http://${SERVICE_IP}:${SERVICE_PORT}"
+                        echo "Pour tester: curl http://${SERVICE_IP}:${SERVICE_PORT}"
+                        curl -f http://${SERVICE_IP}:${SERVICE_PORT} || echo "⚠️ Le test curl a échoué, mais l'application peut être en cours de démarrage"
                     '''
                 }
             }
@@ -159,30 +196,10 @@ EOF
             script {
                 sh """
                     echo "=== DÉBOGAGE DÉTAILLÉ ==="
-
-                    # Décrire le pod
                     kubectl describe pods -l app=${env.DEPLOYMENT_NAME}
-
-                    # Logs détaillés
-                    echo "=== LOGS COMPLETS ==="
                     kubectl logs deployment/${env.DEPLOYMENT_NAME} --previous || true
                     kubectl logs deployment/${env.DEPLOYMENT_NAME} || true
-
-                    # Événements
-                    echo "=== ÉVÉNEMENTS ==="
                     kubectl get events --field-selector=involvedObject.name=${env.DEPLOYMENT_NAME} --sort-by='.lastTimestamp'
-
-                    # Exécuter une commande dans le pod pour diagnostiquer
-                    echo "=== DIAGNOSTIC INTERNE ==="
-                    POD_NAME=\$(kubectl get pods -l app=${env.DEPLOYMENT_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-                    if [ ! -z "\$POD_NAME" ]; then
-                        echo "État du conteneur:"
-                        kubectl exec \$POD_NAME -- ps aux || true
-                        echo "Ports écoutés:"
-                        kubectl exec \$POD_NAME -- netstat -tlnp || true
-                        echo "Variables d'environnement:"
-                        kubectl exec \$POD_NAME -- env || true
-                    fi
                 """
             }
         }
