@@ -169,29 +169,27 @@ pipeline {
         failure {
             echo "💥 Déploiement échoué"
 
-            script {
-                sh """
-                    echo "=== DÉBOGAGE DÉTAILLÉ ==="
-                    echo ""
-                    echo "=== Pods ==="
-                    kubectl get pods --all-namespaces
-                    
-                    echo ""
-                    echo "=== Événements ==="
-                    kubectl get events --sort-by='.lastTimestamp'
-                    
-                    echo ""
-                    echo "=== Logs PostgreSQL ==="
-                    kubectl logs deployment/postgres --tail=50 || true
-                    
-                    echo ""
-                    echo "=== Logs API ==="
-                    kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=50 || true
-                    
-                    echo ""
-                    echo "=== Description Deployment API ==="
-                    kubectl describe deployment ${env.DEPLOYMENT_NAME}
-                """
+            node {
+                script {
+                    sh """
+                        echo "=== DÉBOGAGE DÉTAILLÉ ==="
+                        echo ""
+                        echo "=== Pods ==="
+                        kubectl get pods --all-namespaces || true
+                        echo ""
+                        echo "=== Événements ==="
+                        kubectl get events --sort-by='.lastTimestamp' || true
+                        echo ""
+                        echo "=== Logs PostgreSQL ==="
+                        kubectl logs deployment/postgres --tail=50 || true
+                        echo ""
+                        echo "=== Logs API ==="
+                        kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=50 || true
+                        echo ""
+                        echo "=== Description Deployment API ==="
+                        kubectl describe deployment ${env.DEPLOYMENT_NAME} || true
+                    """
+                }
             }
         }
     }
