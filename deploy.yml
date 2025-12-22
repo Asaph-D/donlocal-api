@@ -1,48 +1,56 @@
 ---
-# Ansible playbook to build, push and deploy the donlocal-api to Kubernetes
-- name: Deploy donlocal-api
+- name: Déployer donlocal-api sur Kubernetes
   hosts: localhost
   connection: local
   gather_facts: no
+  
   vars:
-    image_name: "{{ lookup('env','IMAGE_NAME') | default('asaphkouokam/donlocal-api:latest') }}"
-    manifests: "{{ lookup('env','K8S_MANIFEST') | default('kubernetes-config.yaml') }}"
-    kubeconfig: "{{ lookup('env','KUBECONFIG') | default('') }}"
-
+    image_name: "{{ lookup('env', 'IMAGE_NAME') | default('asaphkouokam/donlocal-api:latest') }}"
+    deployment_name: "donlocal-api"
+    namespace: "default"
+    kube_manifest: "kubernetes-config.yaml"
+  
   tasks:
-    - name: Ensure docker is available
-      command: docker --version
-
-    - name: Build Docker image
-      shell: |
-        docker build -t {{ image_name }} .
-      args:
-        chdir: "{{ playbook_dir }}"
-
-    - name: Push Docker image
-      shell: docker push {{ image_name }}
-
-    - name: Apply Kubernetes manifests
-      shell: |
-        if [ -n "{{ kubeconfig }}" ]; then
-          kubectl --kubeconfig={{ kubeconfig }} apply -f {{ manifests }}
-        else
-          kubectl apply -f {{ manifests }}
-        fi
-
-
-    - name: Update deployment image (trigger rolling update)
-      shell: |
-        if [ -n "{{ kubeconfig }}" ]; then
-          kubectl --kubeconfig={{ kubeconfig }} set image deployment/donlocal-api donlocal-api={{ image_name }} -n default || true
-          kubectl --kubeconfig={{ kubeconfig }} rollout status deployment/donlocal-api -n default --timeout=300s
-        else
-          kubectl set image deployment/donlocal-api donlocal-api={{ image_name }} -n default || true
-          kubectl rollout status deployment/donlocal-api -n default --timeout=300s
-        fi
-
-    - name: Show few logs from the API deployment
-      shell: |
-        kubectl logs deployment/donlocal-api --tail=30 || true
-
-                                        
+    - name: Afficher les informations de déploiement
+      debug:
+        msg: "🎯 Déploiement de {{ image_name }} sur Kubernetes"
+        
+    - name: Vérifier l'accès au cluster
+      command: kubectl cluster-info
+      register: cluster_check
+      changed_when: false
+      
+    - name: Appliquer les manifestes Kubernetes
+      command: kubectl apply -f {{ kube_manifest }}
+      register: apply_result
+      changed_when: "'configured' in apply_result.stdout or 'created' in apply_result.stdout"
+      
+    - name: Mettre à jour l'image du déploiement
+      command: |
+        kubectl set image deployment/{{ deployment_name }} \
+          {{ deployment_name }}={{ image_name }} \
+          -n {{ namespace }}
+      register: image_update
+      changed_when: "'updated' in image_update.stdout"
+      
+    - name: Attendre le rollout
+      command: |
+        kubectl rollout status deployment/{{ deployment_name }} \
+          -n {{ namespace }} \
+          --timeout=300s
+      register: rollout
+      until: rollout.rc == 0
+      retries: 6
+      delay: 10
+      
+    - name: Vérifier l'état des pods
+      command: kubectl get pods -l app={{ deployment_name }} -n {{ namespace }} -o wide
+      register: pods
+      changed_when: false
+      
+    - name: Journaliser le résultat
+      debug:
+        msg:
+          - "✅ Déploiement terminé"
+          - "📊 Pods:"
+          - "{{ pods.stdout_lines | join('\n  ') }}"
