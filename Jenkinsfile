@@ -58,7 +58,7 @@ EOF
 
                         # Créer le service si nécessaire
                         if ! kubectl get service ${env.DEPLOYMENT_NAME} >/dev/null 2>&1; then
-                            kubectl expose deployment ${env.DEPLOYMENT_NAME} --type=NodePort --port=${env.SERVICE_PORT}
+                            kubectl expose deployment ${env.DEPLOYMENT_NAME} --type=LoadBalancer --port=${env.SERVICE_PORT}
                         fi
                     """
                 }
