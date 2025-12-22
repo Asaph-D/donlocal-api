@@ -20,7 +20,7 @@ exports.register = async (req, res) => {
     const { name, email, password, phone, whatsapp, location } = req.body;
 
     // Vérifier si l'utilisateur existe
-    const userExists = await User.findOne({ email });
+    const userExists = await User.findOne({ where: { email } });
     if (userExists) {
       return res.status(400).json({
         success: false,
@@ -39,14 +39,14 @@ exports.register = async (req, res) => {
     });
 
     // Générer token
-    const token = generateToken(user._id);
+    const token = generateToken(user.id);
 
     res.status(201).json({
       success: true,
       message: 'Compte créé avec succès',
       data: {
         user: {
-          id: user._id,
+          id: user.id,
           name: user.name,
           email: user.email,
           phone: user.phone,
@@ -82,7 +82,7 @@ exports.login = async (req, res) => {
     }
 
     // Vérifier l'utilisateur
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ where: { email } });
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -100,14 +100,14 @@ exports.login = async (req, res) => {
     }
 
     // Générer token
-    const token = generateToken(user._id);
+    const token = generateToken(user.id);
 
     res.status(200).json({
       success: true,
       message: 'Connexion réussie',
       data: {
         user: {
-          id: user._id,
+          id: user.id,
           name: user.name,
           email: user.email,
           phone: user.phone,
@@ -133,7 +133,7 @@ exports.login = async (req, res) => {
 // @access  Private
 exports.getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id, { attributes: { exclude: ['password'] } });
 
     res.status(200).json({
       success: true,
