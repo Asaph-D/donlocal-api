@@ -32,7 +32,7 @@
         msg: "❌ Fichier inventory.ini introuvable dans {{ playbook_dir }}"
       when: not inventory_file.stat.exists
 
-# Installer les prérequis sur toutes les machines
+# Installer les prérequis sur toutes les machines (sauf localhost si sudo NOPASSWD n'est pas configuré)
 - import_playbook: 01-prerequisites.yml
 
 # Initialiser le cluster Kubernetes sur le master

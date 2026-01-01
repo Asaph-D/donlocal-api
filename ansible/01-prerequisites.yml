@@ -1,6 +1,21 @@
 - hosts: all
   become: yes
+  # Note: Si localhost est dans l'inventory et sudo demande un mot de passe,
+  # configurez sudo NOPASSWD: sudo visudo et ajoutez: asaph ALL=(ALL) NOPASSWD: ALL
+  # Ou excluez localhost de l'inventory si tout est déjà installé
   tasks:
+    - name: Vérifier si on peut utiliser sudo sans mot de passe
+      command: sudo -n true
+      register: sudo_check
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      when: inventory_hostname == "localhost"
+    
+    - name: Avertir si sudo nécessite un mot de passe sur localhost
+      debug:
+        msg: "⚠️ Sudo nécessite un mot de passe sur localhost. Configurez sudo NOPASSWD ou excluez localhost de l'inventory."
+      when: inventory_hostname == "localhost" and sudo_check.rc != 0
     - name: Vérifier les paquets de dépendances déjà installés
       shell: dpkg-query -W -f='${Package}\n' apt-transport-https ca-certificates curl gnupg lsb-release 2>/dev/null || true
       register: installed_packages
