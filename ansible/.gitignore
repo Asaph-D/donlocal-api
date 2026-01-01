@@ -1,0 +1,19 @@
+# Fichiers temporaires Ansible
+*.retry
+*.log
+
+# Fichiers de configuration locaux (ne pas commiter les credentials)
+inventory.local.ini
+inventory.prod.ini
+secrets.yml
+vault_pass.txt
+
+# Fichiers générés
+/tmp/
+*.swp
+*.swo
+*~
+
+# Fichiers Kubernetes générés
+/tmp/*.yml
+

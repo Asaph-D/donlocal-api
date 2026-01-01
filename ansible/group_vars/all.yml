@@ -1,0 +1,34 @@
+---
+# Variables globales pour le déploiement DonLocal
+# Ces variables sont utilisées par tous les playbooks
+
+# Configuration Kubernetes
+k8s_version: "1.28"
+pod_network_cidr: "10.244.0.0/16"
+kubeconfig_path: "/etc/kubernetes/admin.conf"
+
+# Configuration PostgreSQL
+postgres_image: "postgres:15"
+postgres_db: "donlocal"
+postgres_user: "postgres"
+postgres_password: "1234"
+postgres_port: 5432
+postgres_replicas: 1  # Nombre de répliques PostgreSQL (1 pour single instance, 3+ pour cluster)
+
+# Configuration de l'application
+app_name: "donlocal-api"
+app_namespace: "default"
+app_port: 5000
+app_replicas: 2  # Nombre de répliques de l'API
+
+# Configuration des volumes persistants
+storage_class_name: "standard"  # À adapter selon votre provisioner de stockage
+postgres_storage_size: "10Gi"
+
+# Configuration réseau
+service_type: "NodePort"  # NodePort, ClusterIP, ou LoadBalancer
+
+# Utilisateurs
+ansible_user: "{{ ansible_user | default('ubuntu') }}"
+kubectl_user: "{{ ansible_user }}"
+

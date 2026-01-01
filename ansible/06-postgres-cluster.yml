@@ -1,0 +1,59 @@
+---
+# Playbook optionnel pour configurer PostgreSQL en mode cluster/réplication
+# Ce playbook configure la réplication PostgreSQL si nécessaire
+# Actuellement, PostgreSQL est déployé en single instance avec StatefulSet
+# Pour un vrai cluster PostgreSQL, considérez utiliser:
+# - PostgreSQL Operator (Crunchy Data)
+# - Patroni avec etcd
+# - PostgreSQL streaming replication manuelle
+
+- name: Configurer PostgreSQL en mode cluster (optionnel)
+  hosts: master
+  become: yes
+  vars:
+    postgres_replicas: "{{ postgres_replicas | default(1) }}"
+    enable_replication: "{{ enable_replication | default(false) | bool }}"
+  
+  tasks:
+    - name: Vérifier si la réplication est activée
+      debug:
+        msg: "La réplication PostgreSQL n'est pas activée. PostgreSQL est déployé en single instance."
+      when: not enable_replication
+    
+    - name: Afficher les informations sur le déploiement PostgreSQL actuel
+      command: kubectl get statefulset postgres -o yaml
+      register: postgres_statefulset
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Afficher les informations sur les pods PostgreSQL
+      command: kubectl get pods -l app=postgres -o wide
+      register: postgres_pods
+      changed_when: false
+    
+    - name: Résumé du déploiement PostgreSQL
+      debug:
+        msg:
+          - "📊 État actuel de PostgreSQL:"
+          - "  - Mode: Single instance (StatefulSet)"
+          - "  - Répliques: {{ postgres_replicas }}"
+          - "  - Volumes persistants: Activés"
+          - ""
+          - "💡 Pour activer la réplication PostgreSQL:"
+          - "  1. Utilisez un opérateur PostgreSQL (Crunchy Data, Zalando)"
+          - "  2. Configurez Patroni avec etcd"
+          - "  3. Configurez manuellement la streaming replication"
+          - ""
+          - "📦 Pods PostgreSQL:"
+          - "{{ postgres_pods.stdout_lines | join('\n') }}"
+    
+    - name: Vérifier la connectivité PostgreSQL depuis les pods de l'API
+      command: kubectl exec -it deployment/donlocal-api -- sh -c "nc -zv postgres 5432 || echo 'Connexion échouée'"
+      register: postgres_connectivity
+      ignore_errors: yes
+      changed_when: false
+    
+    - name: Afficher le résultat de la connectivité
+      debug:
+        msg: "{{ '✅ PostgreSQL accessible depuis les pods API' if postgres_connectivity.rc == 0 else '⚠️ Vérifiez la connectivité PostgreSQL' }}"
+

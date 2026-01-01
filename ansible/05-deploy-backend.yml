@@ -1,15 +1,58 @@
 - hosts: master
   become: yes
   vars:
-    IMAGE_NAME: "{{ lookup('env','IMAGE_NAME') }}"
+    IMAGE_NAME: "{{ lookup('env','IMAGE_NAME') | default('asaphkouokam/donlocal-api:latest') }}"
   tasks:
+    - name: Vérifier que l'image est définie
+      fail:
+        msg: "IMAGE_NAME doit être défini (via variable d'environnement ou --extra-vars)"
+      when: IMAGE_NAME == "" or IMAGE_NAME is not defined
+    
+    - name: Vérifier que PostgreSQL est accessible
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get svc postgres
+      register: postgres_svc
+      failed_when: postgres_svc.rc != 0
+      changed_when: false
+    
     - name: Template backend manifest
-      become_user: ubuntu
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
       template:
         src: k8s/backend.yml.j2
         dest: /tmp/backend.yml
         mode: '0644'
-
+      vars:
+        IMAGE_NAME: "{{ IMAGE_NAME }}"
+        DB_HOST: "{{ 'postgres' }}"
+        DB_PORT: "{{ postgres_port | default(5432) }}"
+        APP_REPLICAS: "{{ app_replicas | default(2) }}"
+        APP_PORT: "{{ app_port | default(5000) }}"
+        SERVICE_TYPE: "{{ service_type | default('NodePort') }}"
+    
     - name: Déployer backend
-      become_user: ubuntu
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl apply -f /tmp/backend.yml
+      register: backend_deploy
+    
+    - name: Attendre que le déploiement soit prêt
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl rollout status deployment/{{ app_name | default('donlocal-api') }} --timeout=300s
+      register: rollout_status
+      retries: 5
+      delay: 10
+      until: rollout_status.rc == 0
+      ignore_errors: yes
+    
+    - name: Afficher l'état du déploiement
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get deployment,svc,pods -l app={{ app_name | default('donlocal-api') }} -o wide
+      register: backend_status
+      changed_when: false
+    
+    - name: Résumé du déploiement backend
+      debug:
+        msg:
+          - "✅ Backend déployé"
+          - "📦 Image: {{ IMAGE_NAME }}"
+          - "📊 État:"
+          - "{{ backend_status.stdout_lines | join('\n') }}"

@@ -1,6 +1,40 @@
 - hosts: master
   become: yes
   tasks:
-    - name: Déployer PostgreSQL
-      become_user: ubuntu
+    - name: Vérifier que le cluster est accessible
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl cluster-info
+      register: cluster_check
+      changed_when: false
+      failed_when: cluster_check.rc != 0
+    
+    - name: Déployer PostgreSQL (StatefulSet avec volumes persistants)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl apply -f {{ playbook_dir }}/k8s/postgres.yml
+      register: postgres_deploy
+    
+    - name: Afficher le résultat du déploiement
+      debug:
+        msg: "PostgreSQL déployé avec StatefulSet et volumes persistants"
+    
+    - name: Attendre que PostgreSQL soit prêt
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl wait --for=condition=ready pod -l app=postgres --timeout=300s
+      register: postgres_ready
+      retries: 10
+      delay: 10
+      until: postgres_ready.rc == 0
+      ignore_errors: yes
+    
+    - name: Afficher l'état de PostgreSQL
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get statefulset,svc,pvc -l app=postgres -o wide
+      register: postgres_status
+      changed_when: false
+    
+    - name: Résumé du déploiement PostgreSQL
+      debug:
+        msg:
+          - "✅ PostgreSQL déployé"
+          - "📊 État:"
+          - "{{ postgres_status.stdout_lines | join('\n') }}"

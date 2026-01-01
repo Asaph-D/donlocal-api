@@ -36,9 +36,15 @@ pipeline {
                             exit 1
                         fi
                         
-                        # Vérifier que le playbook existe
-                        if [ ! -f "deploy.yml" ]; then
-                            echo "❌ deploy.yml non trouvé dans le dépôt"
+                        # Vérifier que le playbook principal existe
+                        if [ ! -f "ansible/deploy.yml" ]; then
+                            echo "❌ ansible/deploy.yml non trouvé dans le dépôt"
+                            exit 1
+                        fi
+                        
+                        # Vérifier que l'inventory existe
+                        if [ ! -f "ansible/inventory.ini" ]; then
+                            echo "❌ ansible/inventory.ini non trouvé"
                             exit 1
                         fi
                         
@@ -74,17 +80,33 @@ pipeline {
         stage('Déployer avec Ansible') {
             steps {
                 script {
-                    echo "🚀 Déploiement avec Ansible..."
+                    echo "🚀 Déploiement avec Ansible (multi-machines)..."
                     
                     sh """
-                        echo "🎯 Exécution du playbook deploy.yml"
+                        cd ansible
+                        
+                        echo "🎯 Exécution du playbook principal deploy.yml"
                         echo "📋 Paramètres:"
                         echo "  Image: ${env.IMAGE_NAME}"
                         echo "  Déploiement: ${env.DEPLOYMENT_NAME}"
                         echo "  Namespace: ${env.KUBE_NAMESPACE}"
+                        echo ""
+                        echo "📦 Configuration du cluster:"
+                        echo "  - Installation des prérequis sur toutes les machines"
+                        echo "  - Initialisation du cluster Kubernetes"
+                        echo "  - Ajout des workers au cluster"
+                        echo "  - Déploiement de PostgreSQL avec volumes persistants"
+                        echo "  - Déploiement de l'API backend"
+                        echo ""
                         
-                        ansible-playbook deploy.yml \
-                          --extra-vars "IMAGE_NAME=${env.IMAGE_NAME}"
+                        # Variables d'environnement pour contrôler les étapes
+                        # SKIP_PREREQUISITES=true pour ignorer l'installation des prérequis
+                        # SKIP_CLUSTER_INIT=true pour ignorer l'initialisation du cluster
+                        # SKIP_POSTGRES=true pour ignorer le déploiement PostgreSQL
+                        # SKIP_BACKEND=true pour ignorer le déploiement backend
+                        
+                        ansible-playbook -i inventory.ini deploy.yml \
+                          -e "IMAGE_NAME=${env.IMAGE_NAME}"
                     """
                 }
             }
@@ -183,7 +205,7 @@ pipeline {
                     kubectl get events --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
                     echo ""
                     echo "=== Logs PostgreSQL ==="
-                    kubectl logs deployment/postgres --tail=10 2>/dev/null || true
+                    kubectl logs statefulset/postgres --tail=10 2>/dev/null || kubectl logs deployment/postgres --tail=10 2>/dev/null || true
                     echo ""
                     echo "=== Logs API ==="
                     kubectl logs deployment/${env.DEPLOYMENT_NAME} --tail=30 2>/dev/null || true

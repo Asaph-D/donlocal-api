@@ -1,0 +1,85 @@
+---
+# Playbook principal pour déployer l'application DonLocal sur un cluster Kubernetes multi-machines
+# Ce playbook orchestre tous les étapes du déploiement
+
+- name: Afficher les informations de déploiement
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    image_name: "{{ lookup('env', 'IMAGE_NAME') | default('asaphkouokam/donlocal-api:latest') }}"
+  
+  tasks:
+    - name: Afficher les informations de déploiement
+      debug:
+        msg:
+          - "🚀 Déploiement DonLocal - Configuration multi-machines"
+          - "📦 Image: {{ image_name }}"
+          - "📋 Étapes à exécuter:"
+          - "  1. Installation des prérequis sur toutes les machines"
+          - "  2. Initialisation du cluster Kubernetes"
+          - "  3. Ajout des workers au cluster"
+          - "  4. Déploiement de PostgreSQL avec volumes persistants"
+          - "  5. Déploiement de l'API backend"
+    
+    - name: Vérifier que l'inventory existe
+      stat:
+        path: "{{ playbook_dir }}/inventory.ini"
+      register: inventory_file
+      failed_when: not inventory_file.stat.exists
+      failed_msg: "❌ Fichier inventory.ini introuvable dans {{ playbook_dir }}"
+
+# Installer les prérequis sur toutes les machines
+- import_playbook: 01-prerequisites.yml
+
+# Initialiser le cluster Kubernetes sur le master
+- import_playbook: 02-k8s-init-master.yml
+
+# Joindre les workers au cluster
+- import_playbook: 03-k8s-join-workers.yml
+
+# Déployer PostgreSQL avec StatefulSet et volumes persistants
+- import_playbook: 04-deploy-postgres.yml
+
+# Déployer le backend API
+- name: Déployer le backend API
+  import_playbook: 05-deploy-backend.yml
+  vars:
+    IMAGE_NAME: "{{ image_name }}"
+
+# Résumé final
+- name: Afficher le résumé du déploiement
+  hosts: master
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Vérifier l'état du cluster
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get nodes -o wide
+      register: nodes_info
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Vérifier l'état des déploiements
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get deployments,statefulsets,pods,services -o wide
+      register: deployments_info
+      changed_when: false
+      ignore_errors: yes
+    
+    - name: Afficher le résumé
+      debug:
+        msg:
+          - "✅ Déploiement terminé avec succès"
+          - ""
+          - "📊 État du cluster Kubernetes:"
+          - "{{ nodes_info.stdout_lines | default(['Non disponible']) | join('\n') }}"
+          - ""
+          - "📦 Déploiements:"
+          - "{{ deployments_info.stdout_lines | default(['Non disponible']) | join('\n') }}"
+          - ""
+          - "🌐 Pour accéder à l'API:"
+          - "  kubectl get service donlocal-api"
+          - ""
+          - "🐘 PostgreSQL est accessible via le service 'postgres' sur le port 5432"
+          - "   Depuis les pods: DB_HOST=postgres DB_PORT=5432"

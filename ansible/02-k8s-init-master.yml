@@ -1,8 +1,7 @@
 - hosts: master
   become: yes
-  vars:
-    pod_network_cidr: "10.244.0.0/16"
-    kubeconfig_path: "/etc/kubernetes/admin.conf"
+  # Les variables sont définies dans group_vars/all.yml
+  # pod_network_cidr et kubeconfig_path sont utilisées depuis group_vars
 
   tasks:
 
@@ -18,18 +17,18 @@
       ignore_errors: false
 
     - name: Créer le dossier .kube pour l'utilisateur
-      become_user: "{{ ansible_user }}"
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
       file:
-        path: "/home/{{ ansible_user }}/.kube"
+        path: "/home/{{ kubectl_user | default(ansible_user) }}/.kube"
         state: directory
         mode: '0755'
 
     - name: Copier admin.conf vers le kubeconfig utilisateur
       copy:
         src: "{{ kubeconfig_path }}"
-        dest: "/home/{{ ansible_user }}/.kube/config"
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
+        dest: "/home/{{ kubectl_user | default(ansible_user) }}/.kube/config"
+        owner: "{{ kubectl_user | default(ansible_user) }}"
+        group: "{{ kubectl_user | default(ansible_user) }}"
         mode: '0644'
         remote_src: yes
 
@@ -45,7 +44,7 @@
         mode: '0755'
 
     - name: Installer Flannel (CNI)
-      become_user: "{{ ansible_user }}"
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.25.5/Documentation/kube-flannel.yml
       environment:
-        KUBECONFIG: "/home/{{ ansible_user }}/.kube/config"
+        KUBECONFIG: "/home/{{ kubectl_user | default(ansible_user) }}/.kube/config"
