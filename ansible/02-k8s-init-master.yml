@@ -48,4 +48,4 @@
       become_user: "{{ ansible_user }}"
       command: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.25.5/Documentation/kube-flannel.yml
       environment:
-        KUBEC
+        KUBECONFIG: "/home/{{ ansible_user }}/.kube/config"
