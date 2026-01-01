@@ -1,0 +1,15 @@
+- hosts: master
+  become: yes
+  vars:
+    IMAGE_NAME: "{{ lookup('env','IMAGE_NAME') }}"
+  tasks:
+    - name: Template backend manifest
+      become_user: ubuntu
+      template:
+        src: k8s/backend.yml.j2
+        dest: /tmp/backend.yml
+        mode: '0644'
+
+    - name: Déployer backend
+      become_user: ubuntu
+      command: kubectl apply -f /tmp/backend.yml

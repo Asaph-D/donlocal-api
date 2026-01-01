@@ -1,0 +1,51 @@
+- hosts: master
+  become: yes
+  vars:
+    pod_network_cidr: "10.244.0.0/16"
+    kubeconfig_path: "/etc/kubernetes/admin.conf"
+
+  tasks:
+
+    - name: Vérifier si le cluster est déjà initialisé
+      stat:
+        path: "{{ kubeconfig_path }}"
+      register: kubeadm_already_init
+
+    - name: Initialiser le cluster Kubernetes
+      command: kubeadm init --pod-network-cidr={{ pod_network_cidr }}
+      when: not kubeadm_already_init.stat.exists
+      register: kubeadm_init
+      ignore_errors: false
+
+    - name: Créer le dossier .kube pour l'utilisateur
+      become_user: "{{ ansible_user }}"
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        mode: '0755'
+
+    - name: Copier admin.conf vers le kubeconfig utilisateur
+      copy:
+        src: "{{ kubeconfig_path }}"
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+        remote_src: yes
+
+    - name: Sauvegarder la commande kubeadm join
+      command: kubeadm token create --print-join-command
+      register: join_command
+      changed_when: false
+
+    - name: Enregistrer la commande join dans un fichier
+      copy:
+        content: "{{ join_command.stdout }}"
+        dest: /tmp/kube_join.sh
+        mode: '0755'
+
+    - name: Installer Flannel (CNI)
+      become_user: "{{ ansible_user }}"
+      command: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.25.5/Documentation/kube-flannel.yml
+      environment:
+        KUBEC

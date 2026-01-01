@@ -1,0 +1,11 @@
+- hosts: workers
+  become: yes
+  tasks:
+    - name: Copier la commande join
+      copy:
+        src: /tmp/kube_join.sh
+        dest: /tmp/kube_join.sh
+        mode: 0755
+
+    - name: Join cluster
+      command: sh /tmp/kube_join.sh

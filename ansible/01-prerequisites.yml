@@ -1,0 +1,131 @@
+- hosts: all
+  become: yes
+  tasks:
+    - name: Vérifier les paquets de dépendances déjà installés
+      shell: dpkg-query -W -f='${Package}\n' apt-transport-https ca-certificates curl gnupg lsb-release 2>/dev/null || true
+      register: installed_packages
+      changed_when: false
+
+    - name: Déterminer les paquets manquants
+      set_fact:
+        packages_to_install: "{{ ['apt-transport-https', 'ca-certificates', 'curl', 'gnupg', 'lsb-release'] | difference(installed_packages.stdout_lines) }}"
+
+    - name: Attendre que le lock APT soit libéré
+      shell: while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done
+      when: packages_to_install | length > 0 or k8s_packages_to_install is defined and k8s_packages_to_install | length > 0
+      changed_when: false
+
+    - name: Installer uniquement les dépendances manquantes
+      apt:
+        name: "{{ packages_to_install }}"
+        update_cache: yes
+      when: packages_to_install | length > 0
+      retries: 3
+      delay: 10
+      register: apt_result
+      until: apt_result is succeeded
+
+    - name: Créer le répertoire pour les clés GPG
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Vérifier si la clé GPG Kubernetes existe
+      stat:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      register: k8s_key
+
+    - name: Ajouter la clé GPG pour Kubernetes
+      ansible.builtin.shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      when: not k8s_key.stat.exists
+
+    - name: Vérifier si le dépôt Kubernetes existe
+      stat:
+        path: /etc/apt/sources.list.d/kubernetes.list
+      register: k8s_repo
+
+    - name: Ajouter le dépôt Kubernetes officiel
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb /"
+        state: present
+        filename: kubernetes
+      when: not k8s_repo.stat.exists
+
+    - name: Vérifier si kubelet est installé
+      command: dpkg-query -W -f='${Status}' kubelet
+      register: kubelet_check
+      failed_when: false
+      changed_when: false
+
+    - name: Vérifier si kubeadm est installé
+      command: dpkg-query -W -f='${Status}' kubeadm
+      register: kubeadm_check
+      failed_when: false
+      changed_when: false
+
+    - name: Vérifier si kubectl est installé
+      command: dpkg-query -W -f='${Status}' kubectl
+      register: kubectl_check
+      failed_when: false
+      changed_when: false
+
+    - name: Déterminer les paquets Kubernetes manquants
+      set_fact:
+        k8s_packages_to_install: []
+
+    - name: Ajouter kubelet à la liste si non installé
+      set_fact:
+        k8s_packages_to_install: "{{ k8s_packages_to_install + ['kubelet'] }}"
+      when: "'install ok installed' not in kubelet_check.stdout"
+
+    - name: Ajouter kubeadm à la liste si non installé
+      set_fact:
+        k8s_packages_to_install: "{{ k8s_packages_to_install + ['kubeadm'] }}"
+      when: "'install ok installed' not in kubeadm_check.stdout"
+
+    - name: Ajouter kubectl à la liste si non installé
+      set_fact:
+        k8s_packages_to_install: "{{ k8s_packages_to_install + ['kubectl'] }}"
+      when: "'install ok installed' not in kubectl_check.stdout"
+
+    - name: Mettre à jour le cache APT si nécessaire
+      apt:
+        update_cache: yes
+      when: k8s_packages_to_install | length > 0
+      retries: 3
+      delay: 10
+      register: apt_cache_result
+      until: apt_cache_result is succeeded
+
+    - name: Installer uniquement les paquets Kubernetes manquants
+      apt:
+        name: "{{ k8s_packages_to_install }}"
+        state: present
+      when: k8s_packages_to_install | length > 0
+      retries: 3
+      delay: 10
+      register: k8s_install_result
+      until: k8s_install_result is succeeded
+
+    - name: Bloquer les mises à jour automatiques pour kubelet, kubeadm et kubectl
+      command: apt-mark hold kubelet kubeadm kubectl
+      when: k8s_packages_to_install | length > 0
+      changed_when: true
+
+    - name: Vérifier si Docker est installé
+      command: docker --version
+      register: docker_check
+      failed_when: false
+      changed_when: false
+
+    - name: Installer Docker uniquement si absent
+      shell: curl -fsSL https://get.docker.com | sh
+      when: docker_check.rc != 0
+
+    - name: Activer et démarrer Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
