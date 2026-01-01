@@ -22,6 +22,7 @@
         path: "/home/{{ kubectl_user | default(ansible_user) }}/.kube"
         state: directory
         mode: '0755'
+      when: not kubeadm_already_init.stat.exists
 
     - name: Copier admin.conf vers le kubeconfig utilisateur
       copy:
@@ -31,20 +32,57 @@
         group: "{{ kubectl_user | default(ansible_user) }}"
         mode: '0644'
         remote_src: yes
+      when: not kubeadm_already_init.stat.exists
+
+    - name: Attendre que le kubeconfig soit disponible
+      wait_for:
+        path: "/home/{{ kubectl_user | default(ansible_user) }}/.kube/config"
+        timeout: 30
+      when: not kubeadm_already_init.stat.exists
 
     - name: Sauvegarder la commande kubeadm join
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubeadm token create --print-join-command
       register: join_command
       changed_when: false
+      environment:
+        KUBECONFIG: "/home/{{ kubectl_user | default(ansible_user) }}/.kube/config"
+      retries: 3
+      delay: 5
+      until: join_command.rc == 0
 
     - name: Enregistrer la commande join dans un fichier
       copy:
         content: "{{ join_command.stdout }}"
         dest: /tmp/kube_join.sh
         mode: '0755'
+      when: join_command.stdout is defined and join_command.stdout != ""
 
     - name: Installer Flannel (CNI)
       become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.25.5/Documentation/kube-flannel.yml
       environment:
         KUBECONFIG: "/home/{{ kubectl_user | default(ansible_user) }}/.kube/config"
+      when: not kubeadm_already_init.stat.exists
+      register: flannel_install
+      retries: 3
+      delay: 10
+      until: flannel_install.rc == 0
+
+    - name: Afficher le statut du cluster
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get nodes
+      register: cluster_status
+      changed_when: false
+      environment:
+        KUBECONFIG: "/home/{{ kubectl_user | default(ansible_user) }}/.kube/config"
+    
+    - name: Résumé de l'initialisation
+      debug:
+        msg:
+          - "✅ Cluster Kubernetes initialisé"
+          - "📋 État des nœuds:"
+          - "{{ cluster_status.stdout_lines | default(['Aucun nœud']) | join('\n') }}"
+          - ""
+          - "🔗 Commande join pour les workers:"
+          - "{{ join_command.stdout | default('Non disponible') }}"

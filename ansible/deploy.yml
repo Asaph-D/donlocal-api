@@ -26,8 +26,11 @@
       stat:
         path: "{{ playbook_dir }}/inventory.ini"
       register: inventory_file
-      failed_when: not inventory_file.stat.exists
-      failed_msg: "❌ Fichier inventory.ini introuvable dans {{ playbook_dir }}"
+    
+    - name: Échouer si l'inventory n'existe pas
+      fail:
+        msg: "❌ Fichier inventory.ini introuvable dans {{ playbook_dir }}"
+      when: not inventory_file.stat.exists
 
 # Installer les prérequis sur toutes les machines
 - import_playbook: 01-prerequisites.yml

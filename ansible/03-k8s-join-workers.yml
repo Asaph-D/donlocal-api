@@ -1,11 +1,44 @@
 - hosts: workers
   become: yes
   tasks:
-    - name: Copier la commande join
-      copy:
-        src: /tmp/kube_join.sh
-        dest: /tmp/kube_join.sh
-        mode: 0755
+    - name: Vérifier si kubelet est configuré (indique que le worker est déjà dans le cluster)
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_config
+      changed_when: false
 
-    - name: Join cluster
+    - name: Vérifier si le worker est déjà membre du cluster
+      set_fact:
+        already_joined: "{{ kubelet_config.stat.exists }}"
+
+    - name: Obtenir la commande join depuis le master
+      command: cat /tmp/kube_join.sh
+      register: join_command_content
+      delegate_to: "{{ groups['master'][0] }}"
+      changed_when: false
+      failed_when: join_command_content.rc != 0
+      failed_msg: "❌ Fichier kube_join.sh introuvable sur le master. Le cluster doit être initialisé d'abord."
+      when: not already_joined | default(false)
+
+    - name: Créer le fichier join sur le worker
+      copy:
+        content: "{{ join_command_content.stdout }}"
+        dest: /tmp/kube_join.sh
+        mode: '0755'
+      when: not already_joined | default(false) and join_command_content.stdout is defined
+
+    - name: Joindre le cluster
       command: sh /tmp/kube_join.sh
+      when: not already_joined | default(false)
+      register: join_result
+      ignore_errors: yes
+
+    - name: Vérifier le résultat du join
+      debug:
+        msg: "✅ Worker déjà membre du cluster ou join réussi"
+      when: already_joined | default(false) or (join_result.rc is defined and join_result.rc == 0)
+
+    - name: Afficher un avertissement si le join a échoué
+      debug:
+        msg: "⚠️ Le join a peut-être échoué. Vérifiez les logs: {{ join_result.stderr | default('') }}"
+      when: not already_joined | default(false) and (join_result.rc is defined and join_result.rc != 0)
