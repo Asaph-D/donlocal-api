@@ -4,6 +4,7 @@ Cette configuration Ansible permet de déployer l'application DonLocal sur un cl
 
 ## 📋 Structure
 
+
 ```
 ansible/
 ├── deploy.yml                    # Playbook principal (orchestre tout)
