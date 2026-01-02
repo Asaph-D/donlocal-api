@@ -32,3 +32,4 @@ service_type: "NodePort"  # NodePort, ClusterIP, ou LoadBalancer
 ansible_user: "{{ ansible_user | default('ubuntu') }}"
 kubectl_user: "{{ ansible_user }}"
 
+

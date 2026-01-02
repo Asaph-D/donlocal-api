@@ -17,3 +17,4 @@ vault_pass.txt
 # Fichiers Kubernetes générés
 /tmp/*.yml
 
+

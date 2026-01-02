@@ -94,3 +94,4 @@ Si vous voulez vraiment utiliser WSL comme worker, il faut :
    ansible all -i inventory.ini -m ping
    ```
 
+

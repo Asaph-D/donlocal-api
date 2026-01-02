@@ -217,3 +217,4 @@ vm-worker1 ansible_host=192.168.56.11 ansible_user=ubuntu ansible_port=22 ansibl
 5. ⏳ Tester avec `ansible all -i inventory.ini -m ping`
 6. ⏳ Relancer le déploiement Jenkins
 
+
