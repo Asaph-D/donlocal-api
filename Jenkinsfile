@@ -81,33 +81,30 @@ pipeline {
             steps {
                 script {
                     echo "🚀 Déploiement avec Ansible (multi-machines)..."
-                    
-                    sh """
-                        cd ansible
-                        
-                        echo "🎯 Exécution du playbook principal deploy.yml"
-                        echo "📋 Paramètres:"
-                        echo "  Image: ${env.IMAGE_NAME}"
-                        echo "  Déploiement: ${env.DEPLOYMENT_NAME}"
-                        echo "  Namespace: ${env.KUBE_NAMESPACE}"
-                        echo ""
-                        echo "📦 Configuration du cluster:"
-                        echo "  - Installation des prérequis sur toutes les machines"
-                        echo "  - Initialisation du cluster Kubernetes"
-                        echo "  - Ajout des workers au cluster"
-                        echo "  - Déploiement de PostgreSQL avec volumes persistants"
-                        echo "  - Déploiement de l'API backend"
-                        echo ""
-                        
-                        # Variables d'environnement pour contrôler les étapes
-                        # SKIP_PREREQUISITES=true pour ignorer l'installation des prérequis
-                        # SKIP_CLUSTER_INIT=true pour ignorer l'initialisation du cluster
-                        # SKIP_POSTGRES=true pour ignorer le déploiement PostgreSQL
-                        # SKIP_BACKEND=true pour ignorer le déploiement backend
-                        
-                        ansible-playbook -i inventory.ini deploy.yml \
-                          -e "IMAGE_NAME=${env.IMAGE_NAME}"
-                    """
+
+                    // Tentative d'exécution non interactive via Jenkins Credentials
+                    try {
+                        withCredentials([string(credentialsId: 'ANSIBLE_BECOME_PASS', variable: 'BECOME_PASS')]) {
+                            sshagent(credentials: ['JENKINS_SSH_KEY']) {
+                                sh '''
+                                    cd ansible
+                                    echo "🎯 Exécution du playbook principal deploy.yml"
+                                    echo "📋 Paramètres:"
+                                    echo "  Image: ${IMAGE_NAME}"
+                                    echo "  Déploiement: ${DEPLOYMENT_NAME}"
+                                    echo "  Namespace: ${KUBE_NAMESPACE}"
+                                    echo ""
+                                    ansible-playbook -i inventory.ini deploy.yml -e "IMAGE_NAME=${IMAGE_NAME} ansible_become_password=${BECOME_PASS}"
+                                '''
+                            }
+                        }
+                    } catch (err) {
+                        echo "⚠️ Credentials Jenkins manquants ou échec SSH agent — fallback vers exécution basique"
+                        sh '''
+                            cd ansible
+                            ansible-playbook -i inventory.ini deploy.yml -e "IMAGE_NAME=${IMAGE_NAME}"
+                        '''
+                    }
                 }
             }
         }
