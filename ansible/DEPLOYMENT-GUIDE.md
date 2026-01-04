@@ -238,3 +238,5 @@ ansible-playbook -i inventory.ini 05-deploy-backend.yml -e "IMAGE_NAME=..."
 Le Jenkinsfile est configuré pour utiliser ce déploiement. Voir `../Jenkinsfile` pour plus de détails.
 
 
+
+

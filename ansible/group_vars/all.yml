@@ -33,3 +33,5 @@ ansible_user: "{{ ansible_user | default('ubuntu') }}"
 kubectl_user: "{{ ansible_user }}"
 
 
+
+

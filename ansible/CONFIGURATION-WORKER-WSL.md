@@ -187,3 +187,5 @@ Pour un déploiement stable :
 
 Une fois tout configuré, le worker rejoindra automatiquement le cluster lors du déploiement.
 
+
+

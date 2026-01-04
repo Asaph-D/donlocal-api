@@ -58,3 +58,5 @@
         msg: "{{ '✅ PostgreSQL accessible depuis les pods API' if postgres_connectivity.rc == 0 else '⚠️ Vérifiez la connectivité PostgreSQL' }}"
 
 
+
+
