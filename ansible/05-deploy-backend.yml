@@ -2,20 +2,33 @@
   become: yes
   vars:
     IMAGE_NAME: "{{ lookup('env','IMAGE_NAME') | default('asaphkouokam/donlocal-api:latest') }}"
+    APP_NAME: "{{ app_name | default('donlocal-api') }}"
+
   tasks:
+
     - name: Vérifier que l'image est définie
       fail:
         msg: "IMAGE_NAME doit être défini (via variable d'environnement ou --extra-vars)"
-      when: IMAGE_NAME == "" or IMAGE_NAME is not defined
-    
-    - name: Vérifier que PostgreSQL est accessible
+      when: IMAGE_NAME is not defined or IMAGE_NAME == ""
+
+    - name: Attendre qu'au moins un nœud soit Ready
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: sh -c "kubectl get nodes --no-headers | awk '{print $2}' | grep -c Ready"
+      register: ready_nodes
+      until: ready_nodes.stdout|int > 0
+      retries: 12
+      delay: 5
+      failed_when: ready_nodes.stdout|int == 0
+      changed_when: false
+
+    - name: Vérifier que le service PostgreSQL existe
       become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl get svc postgres
       register: postgres_svc
       failed_when: postgres_svc.rc != 0
       changed_when: false
-    
-    - name: Template backend manifest
+
+    - name: Générer le manifest Kubernetes du backend
       become_user: "{{ kubectl_user | default(ansible_user) }}"
       template:
         src: k8s/backend.yml.j2
@@ -23,36 +36,45 @@
         mode: '0644'
       vars:
         IMAGE_NAME: "{{ IMAGE_NAME }}"
-        DB_HOST: "{{ 'postgres' }}"
+        DB_HOST: "postgres"
         DB_PORT: "{{ postgres_port | default(5432) }}"
-        APP_REPLICAS: "{{ app_replicas | default(2) }}"
+        APP_REPLICAS: "{{ app_replicas | default(1) | int }}"
         APP_PORT: "{{ app_port | default(5000) }}"
         SERVICE_TYPE: "{{ service_type | default('NodePort') }}"
-    
-    - name: Déployer backend
+
+    - name: Supprimer l'ancien deployment (si existe) pour éviter RollingUpdate bloqué
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl delete deployment {{ APP_NAME }} --ignore-not-found=true
+      changed_when: false
+      failed_when: false
+
+    - name: Déployer ou mettre à jour le backend
       become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl apply -f /tmp/backend.yml
-      register: backend_deploy
-    
-    - name: Attendre que le déploiement soit prêt
+      register: backend_apply
+
+    - name: Ajouter initContainer wait-for-postgres au deployment
       become_user: "{{ kubectl_user | default(ansible_user) }}"
-      command: kubectl rollout status deployment/{{ app_name | default('donlocal-api') }} --timeout=300s
+      command: kubectl patch deployment {{ APP_NAME }} -p '{"spec":{"template":{"spec":{"initContainers":[{"name":"wait-for-postgres","image":"postgres:15","command":["sh","-c","until pg_isready -h postgres -p 5432; do sleep 1; done"],"resources":{"requests":{"cpu":"10m","memory":"16Mi"}}}]}}}}'
+      register: patch_init
+      changed_when: '"patched" in patch_init.stdout or "configured" in patch_init.stdout'
+      failed_when: false
+
+    - name: Attendre rollout (stratégie Recreate, plus rapide)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl rollout status deployment/{{ APP_NAME }} --timeout=120s
       register: rollout_status
-      retries: 5
-      delay: 10
-      until: rollout_status.rc == 0
-      ignore_errors: yes
-    
-    - name: Afficher l'état du déploiement
-      become_user: "{{ kubectl_user | default(ansible_user) }}"
-      command: kubectl get deployment,svc,pods -l app={{ app_name | default('donlocal-api') }} -o wide
-      register: backend_status
+      failed_when: false
       changed_when: false
-    
+
+    - name: Afficher l'état du backend
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get deployment,svc,pods -l app={{ APP_NAME }} -o wide
+      changed_when: false
+
     - name: Résumé du déploiement backend
       debug:
         msg:
-          - "✅ Backend déployé"
+          - "✅ Backend opérationnel"
           - "📦 Image: {{ IMAGE_NAME }}"
-          - "📊 État:"
-          - "{{ backend_status.stdout_lines | join('\n') }}"
+          - "🚀 Application: {{ APP_NAME }}"
