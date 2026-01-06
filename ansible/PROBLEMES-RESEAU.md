@@ -220,3 +220,4 @@ vm-worker1 ansible_host=192.168.56.11 ansible_user=ubuntu ansible_port=22 ansibl
 
 
 
+

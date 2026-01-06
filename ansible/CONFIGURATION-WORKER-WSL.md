@@ -189,3 +189,4 @@ Une fois tout configuré, le worker rejoindra automatiquement le cluster lors du
 
 
 
+
