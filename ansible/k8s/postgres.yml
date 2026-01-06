@@ -1,19 +1,4 @@
 ---
-# Configuration PostgreSQL pour déploiement multi-machines
-# Utilise StatefulSet pour garantir l'ordre et les volumes persistants
-
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: postgres-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-  storageClassName: standard
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -29,56 +14,98 @@ spec:
       labels:
         app: postgres
     spec:
+      # Affiner le scheduling : préférer le master, fallback sur les workers
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            # Préférer le nœud master
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
+            # Fallback : n'importe quel nœud Ready
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Equal
+          value: ""
+          effect: NoSchedule
+      initContainers:
+        - name: log-node
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - "echo Postgres pod scheduled on node: $(NODE_NAME); sleep 1"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            runAsUser: 65534
       containers:
-      - name: postgres
-        image: postgres:15
-        env:
-        - name: POSTGRES_DB
-          value: donlocal
-        - name: POSTGRES_USER
-          value: postgres
-        - name: POSTGRES_PASSWORD
-          value: "1234"
-        - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
-        ports:
-        - containerPort: 5432
-          name: postgres
-        volumeMounts:
-        - name: postgres-storage
-          mountPath: /var/lib/postgresql/data
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: donlocal
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: "1234"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U postgres
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U postgres
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local-storage
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -c
-            - pg_isready -U postgres
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -c
-            - pg_isready -U postgres
-          initialDelaySeconds: 5
-          periodSeconds: 5
-  volumeClaimTemplates:
-  - metadata:
-      name: postgres-storage
-    spec:
-      accessModes: [ "ReadWriteOnce" ]
-      storageClassName: standard
-      resources:
-        requests:
-          storage: 10Gi
+            storage: 10Gi
+
 ---
 apiVersion: v1
 kind: Service
@@ -88,23 +115,9 @@ metadata:
     app: postgres
 spec:
   type: ClusterIP
-  ports:
-  - port: 5432
-    targetPort: 5432
-    protocol: TCP
-    name: postgres
   selector:
     app: postgres
----
-# ConfigMap pour la configuration PostgreSQL (optionnel, pour personnalisation)
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: postgres-config
-  labels:
-    app: postgres
-data:
-  POSTGRES_DB: "donlocal"
-  POSTGRES_USER: "postgres"
-  # Note: Le mot de passe ne devrait pas être dans un ConfigMap en production
-  # Utilisez plutôt un Secret Kubernetes
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

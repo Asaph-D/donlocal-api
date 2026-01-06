@@ -47,8 +47,8 @@
       changed_when: false
       environment:
         KUBECONFIG: "/home/{{ kubectl_user | default(ansible_user) }}/.kube/config"
-      retries: 3
-      delay: 5
+      retries: 2
+      delay: 1
       until: join_command.rc == 0
 
     - name: Enregistrer la commande join dans un fichier

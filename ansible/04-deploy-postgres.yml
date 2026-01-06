@@ -1,40 +1,175 @@
+---
+# Ensure data directory exists on all nodes so hostPath PV can mount
+- hosts: all
+  become: yes
+  tasks:
+    - name: Créer le dossier de données PostgreSQL sur tous les nœuds
+      file:
+        path: /data/postgres
+        state: directory
+        owner: 999
+        group: 999
+        mode: '0777'
+
 - hosts: master
   become: yes
   tasks:
+
     - name: Vérifier que le cluster est accessible
       become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl cluster-info
-      register: cluster_check
       changed_when: false
-      failed_when: cluster_check.rc != 0
-    
-    - name: Déployer PostgreSQL (StatefulSet avec volumes persistants)
+
+    - name: Créer le dossier de données PostgreSQL (si absent)
+      file:
+        path: /data/postgres
+        state: directory
+        owner: 999
+        group: 999
+        mode: '0777'
+      become: yes
+
+    - name: Vérifier si le PersistentVolume postgres existe
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pv postgres-pv
+      register: postgres_pv_check
+      failed_when: false
+      changed_when: false
+
+    - name: Vérifier que StorageClass local-storage existe
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get storageclass local-storage
+      register: sc_check
+      failed_when: false
+      changed_when: false
+
+    - name: Déployer StorageClass local-storage si absent
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl apply -f {{ playbook_dir }}/k8s/storageclass.yml
+      when: sc_check.rc != 0
+
+    - name: Créer le PersistentVolume PostgreSQL (statique)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl apply -f {{ playbook_dir }}/k8s/postgres-pv.yml
+      when: postgres_pv_check.rc != 0
+
+    # 🔑 POINT CLÉ
+
+    - name: Vérifier si le pod postgres-0 existe
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pod postgres-0 -o jsonpath='{.metadata.name}'
+      register: postgres_pod_check
+      failed_when: false
+      changed_when: false
+
+    - name: Vérifier si le pod postgres-0 est Ready (si présent)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pod postgres-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: postgres_pod_ready
+      failed_when: false
+      changed_when: false
+      when: postgres_pod_check.rc == 0
+
+    - name: Vérifier le statut de la PVC postgres-storage-postgres-0 (si existe)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pvc postgres-storage-postgres-0 -o jsonpath='{.status.phase}'
+      register: postgres_pvc_phase
+      failed_when: false
+      changed_when: false
+      when: postgres_pod_check.rc == 0
+
+    - name: Réutiliser le Postgres existant si sain
+      debug:
+        msg: "Réutilisation de postgres-0 existant (Ready et PVC Bound)"
+      when: postgres_pod_check.rc == 0 and postgres_pod_ready.stdout == 'True' and postgres_pvc_phase.stdout == 'Bound'
+
+    - name: Récupérer l'état du PV postgres-pv (si présent)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pv postgres-pv -o jsonpath='{.status.phase}'
+      register: postgres_pv_phase
+      failed_when: false
+      changed_when: false
+      when: postgres_pv_check.rc == 0
+
+    - name: Récupérer le chemin local du PV (spec.local.path) si présent
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pv postgres-pv -o jsonpath='{.spec.local.path}'
+      register: postgres_pv_local_path
+      failed_when: false
+      changed_when: false
+      when: postgres_pv_check.rc == 0
+
+    - name: Récupérer le chemin hostPath du PV (spec.hostPath.path) si présent
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pv postgres-pv -o jsonpath='{.spec.hostPath.path}'
+      register: postgres_pv_hostpath
+      failed_when: false
+      changed_when: false
+      when: postgres_pv_check.rc == 0
+
+    - name: Récupérer le nom de volume référencé par la PVC postgres-storage-postgres-0 (si existante)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl get pvc postgres-storage-postgres-0 -o jsonpath='{.spec.volumeName}'
+      register: postgres_pvc_claim_volume
+      failed_when: false
+      changed_when: false
+      when: postgres_pv_check.rc == 0
+
+    - name: Supprimer le PV postgres-pv s'il est Released ou si son chemin diffère et qu'il n'est pas monté
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl delete pv postgres-pv --ignore-not-found=true
+      when: >
+        postgres_pv_check.rc == 0 and (
+          (postgres_pv_phase.stdout == 'Released') or
+          ((postgres_pv_local_path.stdout != '' and postgres_pv_local_path.stdout != '/data/postgres') or
+           (postgres_pv_hostpath.stdout != '' and postgres_pv_hostpath.stdout != '/data/postgres'))
+        ) and not (postgres_pvc_claim_volume.stdout == 'postgres-pv')
+      changed_when: true
+
+    - name: Supprimer le StatefulSet postgres (si nécessaire)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl delete statefulset postgres --ignore-not-found=true
+      register: delete_sts
+      changed_when: false
+      when: not (postgres_pod_check.rc == 0 and postgres_pod_ready.stdout == 'True' and postgres_pvc_phase.stdout == 'Bound')
+
+    - name: Supprimer la PVC postgres-storage-postgres-0 (si nécessaire)
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl delete pvc postgres-storage-postgres-0 --ignore-not-found=true
+      changed_when: false
+      when: not (postgres_pod_check.rc == 0 and postgres_pod_ready.stdout == 'True' and postgres_pvc_phase.stdout == 'Bound')
+
+    - name: Déployer le Secret PostgreSQL
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl apply -f {{ playbook_dir }}/k8s/postgres-secret.yml
+
+    - name: Déployer le PersistentVolume PostgreSQL
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl apply -f {{ playbook_dir }}/k8s/postgres-pv.yml
+      when: postgres_pv_check.rc != 0
+
+    - name: Attendre que le PV soit disponible
+      become_user: "{{ kubectl_user | default(ansible_user) }}"
+      command: kubectl wait --for=condition=available pv postgres-pv --timeout=30s
+      failed_when: false
+      changed_when: false
+
+    - name: Déployer PostgreSQL (StatefulSet)
       become_user: "{{ kubectl_user | default(ansible_user) }}"
       command: kubectl apply -f {{ playbook_dir }}/k8s/postgres.yml
-      register: postgres_deploy
-    
-    - name: Afficher le résultat du déploiement
-      debug:
-        msg: "PostgreSQL déployé avec StatefulSet et volumes persistants"
-    
-    - name: Attendre que PostgreSQL soit prêt
+
+    - name: Attendre que le pod postgres-0 soit créé
       become_user: "{{ kubectl_user | default(ansible_user) }}"
-      command: kubectl wait --for=condition=ready pod -l app=postgres --timeout=300s
-      register: postgres_ready
-      retries: 10
-      delay: 10
-      until: postgres_ready.rc == 0
-      ignore_errors: yes
-    
+      command: kubectl wait --for=condition=ready pod/postgres-0 --timeout=300s
+      retries: 3
+      delay: 5
+      when: not (postgres_pod_check.rc == 0 and postgres_pod_ready.stdout == 'True' and postgres_pvc_phase.stdout == 'Bound')
+
     - name: Afficher l'état de PostgreSQL
       become_user: "{{ kubectl_user | default(ansible_user) }}"
-      command: kubectl get statefulset,svc,pvc -l app=postgres -o wide
-      register: postgres_status
+      command: kubectl get statefulset,svc,pvc,pv -l app=postgres -o wide
       changed_when: false
-    
+
     - name: Résumé du déploiement PostgreSQL
       debug:
-        msg:
-          - "✅ PostgreSQL déployé"
-          - "📊 État:"
-          - "{{ postgres_status.stdout_lines | join('\n') }}"
+        msg: "✅ PostgreSQL existant ou nouvellement déployé – prêt à l’usage"
