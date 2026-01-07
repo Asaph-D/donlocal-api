@@ -95,3 +95,8 @@ Si vous voulez vraiment utiliser WSL comme worker, il faut :
    ```
 
 
+kubectl get pods -l app=donlocal-api -o wide && echo '--- Vérifier si pod est running ---' && P=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}'); kubectl get pod $P -o jsonpath='{.status.containerStatuses[0]}'
+
+P=$(kubectl get pods -l app=donlocal-api -o jsonpath='{.items[0].metadata.name}'); echo "Pod: $P"; kubectl logs $P -c api --all-containers=true --tail=1000 || true; echo '--- Previous logs ---'; kubectl logs $P -c api --previous --tail=1000 || true
+
+kubectl patch deployment donlocal-api --type='json' -p='[{"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe","value":{"httpGet":{"path":"/api/health","port":5000},"initialDelaySeconds":120,"timeoutSeconds":5,"periodSeconds":10,"failureThreshold":10}},{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe","value":{"httpGet":{"path":"/api/health","port":5000},"initialDelaySeconds":15,"timeoutSeconds":3,"periodSeconds":5,"failureThreshold":3}}]' && kubectl rollout restart deployment/donlocal-api && kubectl rollout status deployment/donlocal-api --timeout=180s || true; kubectl get pods -l app=donlocal-api -o wide
