@@ -29,9 +29,21 @@ spec:
       - name: api
         image: "{{ IMAGE_NAME }}"
         env:
+        # Variables DB_* (utilisées par le code Node.js)
         - name: DB_HOST
           value: "{{ DB_HOST | default('postgres') }}"
         - name: DB_PORT
+          value: "{{ DB_PORT | default('5432') }}"
+        - name: DB_NAME
+          value: "{{ DB_NAME | default(postgres_db | default('donlocal')) }}"
+        - name: DB_USER
+          value: "{{ DB_USER | default(postgres_user | default('postgres')) }}"
+        - name: DB_PASSWORD
+          value: "{{ DB_PASSWORD | default(postgres_password | default('1234')) }}"
+        # Variables POSTGRES_* (compatibilité et initContainers)
+        - name: POSTGRES_HOST
+          value: "{{ DB_HOST | default('postgres') }}"
+        - name: POSTGRES_PORT
           value: "{{ DB_PORT | default('5432') }}"
         - name: POSTGRES_DB
           value: "{{ postgres_db | default('donlocal') }}"
@@ -39,6 +51,11 @@ spec:
           value: "{{ postgres_user | default('postgres') }}"
         - name: POSTGRES_PASSWORD
           value: "{{ postgres_password | default('1234') }}"
+        # Variables serveur
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "{{ APP_PORT | default('5000') }}"
         ports:
         - containerPort: {{ APP_PORT | default(5000) }}
           name: http

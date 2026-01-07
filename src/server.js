@@ -1,11 +1,81 @@
 // src/server.js
-require('dotenv').config();
+// Charger les variables d'environnement en premier
+const path = require('path');
+const fs = require('fs');
+
+// Ne charger .env QUE si on n'est pas dans Kubernetes
+// Dans Kubernetes, les variables sont injectées directement
+const isKubernetes = process.env.KUBERNETES_SERVICE_HOST || process.env.KUBERNETES_PORT;
+
+// Chemin vers le fichier .env
+const envPath = path.join(__dirname, '..', '.env');
+
+// Vérifier si le fichier .env existe et si on n'est pas dans Kubernetes
+if (!isKubernetes && fs.existsSync(envPath)) {
+  console.log(`✅ Fichier .env trouvé: ${envPath}`);
+
+  // Lire le contenu du fichier pour debug (en développement seulement)
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const envContent = fs.readFileSync(envPath, 'utf8');
+      const lines = envContent.split('\n').filter(line => line.trim() && !line.trim().startsWith('#'));
+      console.log(`📄 Fichier .env contient ${lines.length} lignes (hors commentaires)`);
+
+      // Vérifier si DB_PASSWORD est présent
+      const hasDbPassword = lines.some(line => line.startsWith('DB_PASSWORD'));
+      if (hasDbPassword) {
+        const passwordLine = lines.find(line => line.startsWith('DB_PASSWORD'));
+        console.log(`   DB_PASSWORD trouvé: ${passwordLine ? passwordLine.split('=')[0] + '=***' : 'non'}`);
+      } else {
+        console.warn('   ⚠️  DB_PASSWORD non trouvé dans le fichier .env');
+      }
+    } catch (err) {
+      console.warn(`   ⚠️  Impossible de lire le fichier .env: ${err.message}`);
+    }
+  }
+
+  const result = require('dotenv').config({ path: envPath });
+
+  // Vérifier si dotenv a chargé des variables
+  if (result.error) {
+    console.error(`❌ Erreur lors du chargement de .env: ${result.error.message}`);
+  } else if (result.parsed) {
+    const loadedVars = Object.keys(result.parsed);
+    console.log(`📦 ${loadedVars.length} variables chargées depuis .env`);
+  } else {
+    console.warn('⚠️  Aucune variable chargée depuis .env (fichier vide ou mal formaté?)');
+  }
+} else if (!isKubernetes) {
+  // En Kubernetes, on n'a pas besoin de .env
+  console.warn(`⚠️  Fichier .env non trouvé: ${envPath}`);
+  console.warn('   Tentative de chargement depuis le répertoire courant...');
+  require('dotenv').config(); // Essayer sans chemin spécifique
+} else {
+  console.log('☸️  Mode Kubernetes détecté - variables d\'environnement injectées par K8s');
+}
+
+// Debug : Afficher les variables DB chargées (en développement ou Kubernetes)
+const isK8s = process.env.KUBERNETES_SERVICE_HOST || process.env.KUBERNETES_PORT;
+if (process.env.NODE_ENV !== 'production' || isK8s) {
+  console.log('🔍 Variables d\'environnement chargées:');
+  console.log(`   DB_HOST: ${process.env.DB_HOST || '(non défini)'}`);
+  console.log(`   POSTGRES_HOST: ${process.env.POSTGRES_HOST || '(non défini)'}`);
+  console.log(`   DB_PORT: ${process.env.DB_PORT || '(non défini)'}`);
+  console.log(`   POSTGRES_PORT: ${process.env.POSTGRES_PORT || '(non défini)'}`);
+  console.log(`   DB_NAME: ${process.env.DB_NAME || '(non défini)'}`);
+  console.log(`   POSTGRES_DB: ${process.env.POSTGRES_DB || '(non défini)'}`);
+  console.log(`   DB_USER: ${process.env.DB_USER || '(non défini)'}`);
+  console.log(`   POSTGRES_USER: ${process.env.POSTGRES_USER || '(non défini)'}`);
+  console.log(`   DB_PASSWORD: ${process.env.DB_PASSWORD ? '***' : '(non défini ou vide)'}`);
+  console.log(`   POSTGRES_PASSWORD: ${process.env.POSTGRES_PASSWORD ? '***' : '(non défini ou vide)'}`);
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
-const path = require('path');
+// path est déjà déclaré en haut du fichier
 const { connectDB, sequelize } = require('./config/database');
 const User = require('./models/User');
 const Resource = require('./models/Resource');
@@ -168,6 +238,48 @@ app.use((err, req, res, next) => {
 
 // Démarrer le serveur
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+});
+
+// Gestion du graceful shutdown pour Kubernetes
+// Permet à Kubernetes de terminer proprement les pods
+const gracefulShutdown = (signal) => {
+  console.log(`\n🛑 Signal ${signal} reçu, arrêt en cours...`);
+
+  server.close(() => {
+    console.log('✅ Serveur HTTP fermé');
+
+    // Fermer la connexion Sequelize
+    sequelize.close()
+      .then(() => {
+        console.log('✅ Connexion PostgreSQL fermée');
+        console.log('👋 Arrêt terminé proprement');
+        process.exit(0);
+      })
+      .catch((err) => {
+        console.error('❌ Erreur lors de la fermeture de PostgreSQL:', err);
+        process.exit(1);
+      });
+  });
+
+  // Forcer l'arrêt après 10 secondes
+  setTimeout(() => {
+    console.error('⏰ Timeout: arrêt forcé après 10 secondes');
+    process.exit(1);
+  }, 10000);
+};
+
+// Écouter les signaux de terminaison
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Gérer les erreurs non capturées
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  gracefulShutdown('uncaughtException');
 });
