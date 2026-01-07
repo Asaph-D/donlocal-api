@@ -238,48 +238,28 @@ app.use((err, req, res, next) => {
 
 // Démarrer le serveur
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
+let server = app.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
 });
 
-// Gestion du graceful shutdown pour Kubernetes
-// Permet à Kubernetes de terminer proprement les pods
-const gracefulShutdown = (signal) => {
-  console.log(`\n🛑 Signal ${signal} reçu, arrêt en cours...`);
-
+// Gérer les signaux de fermeture proprement
+process.on('SIGTERM', () => {
+  console.log('📛 SIGTERM reçu, fermeture gracieuse du serveur...');
   server.close(() => {
-    console.log('✅ Serveur HTTP fermé');
-
-    // Fermer la connexion Sequelize
-    sequelize.close()
-      .then(() => {
-        console.log('✅ Connexion PostgreSQL fermée');
-        console.log('👋 Arrêt terminé proprement');
-        process.exit(0);
-      })
-      .catch((err) => {
-        console.error('❌ Erreur lors de la fermeture de PostgreSQL:', err);
-        process.exit(1);
-      });
+    console.log('✋ Serveur arrêté');
+    process.exit(0);
   });
-
-  // Forcer l'arrêt après 10 secondes
+  // Si après 30s le serveur n'est pas fermé, force l'arrêt
   setTimeout(() => {
-    console.error('⏰ Timeout: arrêt forcé après 10 secondes');
+    console.error('⚠️ Force shutdown après timeout');
     process.exit(1);
-  }, 10000);
-};
-
-// Écouter les signaux de terminaison
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// Gérer les erreurs non capturées
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  }, 30000);
 });
 
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  gracefulShutdown('uncaughtException');
+process.on('SIGINT', () => {
+  console.log('📛 SIGINT reçu, fermeture gracieuse...');
+  server.close(() => {
+    console.log('✋ Serveur arrêté');
+    process.exit(0);
+  });
 });

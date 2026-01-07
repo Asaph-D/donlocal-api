@@ -46,16 +46,35 @@ spec:
         - name: POSTGRES_PORT
           value: "{{ DB_PORT | default('5432') }}"
         - name: POSTGRES_DB
-          value: "{{ postgres_db | default('donlocal') }}"
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_DB
         - name: POSTGRES_USER
-          value: "{{ postgres_user | default('postgres') }}"
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_USER
         - name: POSTGRES_PASSWORD
-          value: "{{ postgres_password | default('1234') }}"
-        # Variables serveur
-        - name: NODE_ENV
-          value: "production"
-        - name: PORT
-          value: "{{ APP_PORT | default('5000') }}"
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_PASSWORD
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_DB
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_PASSWORD
         ports:
         - containerPort: {{ APP_PORT | default(5000) }}
           name: http

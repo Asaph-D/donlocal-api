@@ -7,6 +7,7 @@ import java.util.UUID;
  * Classe d'initialisation de la base de données avec des données par défaut
  * Crée des utilisateurs, catégories, ressources et messages de démonstration
  */
+
 public class DBInitializer {
 
     /**
