@@ -15,17 +15,79 @@ const Message = require('./models/Message');
 // Initialiser l'application Express
 const app = express();
 
+// Configuration CORS complète pour gérer les requêtes OPTIONS (preflight)
+// IMPORTANT: CORS doit être configuré AVANT Helmet pour éviter les conflits
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Autoriser les requêtes sans origin (Postman, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    // Liste des origines autorisées
+    const allowedOrigins = [
+      process.env.CLIENT_URL,
+      'http://localhost:4200',
+      'http://localhost:3000',
+      'http://192.168.142.61:4200',
+      'http://192.168.142.61:3000',
+      'http://192.168.142.61:30631' // API elle-même si nécessaire
+    ].filter(Boolean); // Retirer les valeurs undefined
+
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      // En développement, autoriser toutes les origines pour faciliter le debug
+      if (process.env.NODE_ENV === 'development') {
+        callback(null, true);
+      } else {
+        callback(new Error('Non autorisé par CORS'));
+      }
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400, // Cache preflight pour 24 heures
+  preflightContinue: false,
+  optionsSuccessStatus: 204 // Répondre avec 204 No Content pour OPTIONS
+};
+
+// Appliquer CORS en PREMIER, avant tous les autres middlewares
+app.use(cors(corsOptions));
+
+// Gérer explicitement les requêtes OPTIONS (preflight) pour toutes les routes
+app.options('*', cors(corsOptions));
+
 // Middlewares de sécurité et performance
-app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_URL }));
+// Configurer Helmet pour ne pas bloquer CORS
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false
+}));
+
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(compression());
 
 // Limiter les requêtes (100 requêtes par 15 minutes)
+// Exclure les requêtes OPTIONS du rate limiting
 const limiter = rateLimit({
-  windowMs: process.env.RATE_LIMIT_WINDOW_MS,
-  max: process.env.RATE_LIMIT_MAX_REQUESTS,
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes par défaut
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // 100 requêtes par défaut
+  skip: (req) => {
+    // Ignorer les requêtes OPTIONS (preflight)
+    return req.method === 'OPTIONS';
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 app.use(limiter);
 
@@ -84,10 +146,23 @@ app.use('/api/upload', uploadRoutes);
 
 // Middleware de gestion des erreurs
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
+  console.error('Error:', err.message);
+  console.error('Stack:', err.stack);
+
+  // Gérer les erreurs CORS spécifiquement
+  if (err.message === 'Non autorisé par CORS') {
+    return res.status(403).json({
+      success: false,
+      message: 'Origine non autorisée par CORS',
+      error: err.message
+    });
+  }
+
+  // Erreur générique
+  res.status(err.status || 500).json({
     success: false,
-    message: 'Une erreur est survenue sur le serveur',
+    message: err.message || 'Une erreur est survenue sur le serveur',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
