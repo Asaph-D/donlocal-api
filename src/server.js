@@ -93,6 +93,28 @@ app.use((err, req, res, next) => {
 
 // Démarrer le serveur
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+let server = app.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+});
+
+// Gérer les signaux de fermeture proprement
+process.on('SIGTERM', () => {
+  console.log('📛 SIGTERM reçu, fermeture gracieuse du serveur...');
+  server.close(() => {
+    console.log('✋ Serveur arrêté');
+    process.exit(0);
+  });
+  // Si après 30s le serveur n'est pas fermé, force l'arrêt
+  setTimeout(() => {
+    console.error('⚠️ Force shutdown après timeout');
+    process.exit(1);
+  }, 30000);
+});
+
+process.on('SIGINT', () => {
+  console.log('📛 SIGINT reçu, fermeture gracieuse...');
+  server.close(() => {
+    console.log('✋ Serveur arrêté');
+    process.exit(0);
+  });
 });
