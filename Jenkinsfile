@@ -60,6 +60,18 @@ pipeline {
             }
         }
 
+        stage('Configurer Minikube Docker') {
+            steps {
+                script {
+                    echo "🔧 Configuration de l'environnement Docker de Minikube"
+                    sh """
+                        eval \$(minikube docker-env)
+                        echo "✅ Environnement Docker de Minikube configuré"
+                    """
+                }
+            }
+        }
+
         stage('Pull Docker Image') {
             steps {
                 script {
@@ -68,6 +80,8 @@ pipeline {
                     sh """
                         if docker pull ${env.IMAGE_NAME} 2>/dev/null; then
                             echo "✅ Image pull réussie"
+                            minikube image load ${env.IMAGE_NAME}
+                            echo "✅ Image chargée dans Minikube"
                         else
                             echo "⚠️ Impossible de pull l'image depuis Docker Hub"
                             echo "Kubernetes la téléchargera directement lors du déploiement"
