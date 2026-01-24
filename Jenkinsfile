@@ -59,14 +59,23 @@ pipeline {
                 }
             }
         }
-
-        stage('Configurer Minikube Docker') {
+        
+        stage('Configurer Minikube') {
             steps {
                 script {
+                    echo "🔍 Vérification de l'état de Minikube"
+                    sh """
+                        if ! minikube status | grep -q "Running"; then
+                            echo "🚀 Minikube n'est pas démarré, démarrage en cours..."
+                            minikube start --driver=docker
+                        else
+                            echo "✅ Minikube est déjà en cours d'exécution"
+                        fi
+                    """
+
                     echo "🔧 Configuration de l'environnement Docker de Minikube"
                     sh """
                         eval \$(minikube docker-env)
-                        echo "✅ Environnement Docker de Minikube configuré"
                     """
                 }
             }
